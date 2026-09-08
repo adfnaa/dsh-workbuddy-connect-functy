@@ -74,7 +74,7 @@ dsh plugin --profile dsh-tui add dsh-workbuddy-connect
 dsh --profile dsh-tui
 ```
 
-> **TUI 用户请先留在 0.2.6**：实测在 TUI 上安装本插件 0.3.0 会导致启动崩溃（报 `events is not iterable`），原因是终端界面插件 `@deepseek-harness-tui/dsh-tui` 还没适配 DSH 新核心（修复已提交，尚未发版）。建议 TUI 用户暂时继续使用 DSH `0.1.1-rc.2` 和本插件 `0.2.6`，等终端界面插件发布适配版本后再升级 0.3.0。
+> **TUI 用户请注意版本搭配**：终端界面插件 `@deepseek-harness-tui/dsh-tui` 需要 **`0.10.0-beta.5` 及以上**（更早的版本装了本插件会启动失败，报 `events is not iterable`）。请先用 TUI 自带的更新方式把壳升到 beta.5 及以上，再安装本插件；当前最新的是 beta 版，正式版发布后同样可用。
 
 > 提示：`dsh-tui` profile 需用 pnpm 11 安装（PATH 里是其他版本会报 `ERR_PNPM_UNEXPECTED_STORE`，用 `npx pnpm@11` 即可）。
 
@@ -86,7 +86,7 @@ dsh --profile dsh-tui
 
 ## 已知限制
 
-- 在 macOS 的 DSH Web / Desktop profile（`0.1.2-rc.1`+、Node 22+）下验证通过；TUI 待终端界面插件发布 0.1.2 适配版后验证（见安装章节说明）。Windows 会依次探测 Local 与 Roaming AppData；WSL 会优先从挂载的 Windows 用户目录读取登录凭据。若 Windows 与 Linux 用户名不同且 Windows 环境变量未传入 WSL，请通过 `WORKBUDDY_AUTH_FILE` 指定实际位置。
+- 在 macOS 的 DSH Web / Desktop / TUI 下验证通过（`0.1.2-rc.1`+、Node 22+；TUI 需终端界面插件 `0.10.0-beta.5` 及以上，见安装章节说明）。Windows 会依次探测 Local 与 Roaming AppData；WSL 会优先从挂载的 Windows 用户目录读取登录凭据。若 Windows 与 Linux 用户名不同且 Windows 环境变量未传入 WSL，请通过 `WORKBUDDY_AUTH_FILE` 指定实际位置。
 - 依赖 WorkBuddy 客户端接口（非官方开放 API），WorkBuddy 更新后插件可能需要随之调整。
 
 ## 免责声明
