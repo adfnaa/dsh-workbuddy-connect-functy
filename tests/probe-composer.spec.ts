@@ -233,6 +233,45 @@ describe('Composer model probe', () => {
     expect(buttonLabels()).toContain(en.probeNoteDismiss)
   })
 
+  it('announces a cached result even if its timestamp predates the click', async () => {
+    probeStatus({ candidates: [], results: [{ id: 'glm-5.2', name: 'GLM-5.2',
+      validation: 'validating', efforts: ['low', 'high'], probedAt: 1 }] })
+    await mount()
+    request.mockImplementation(async (_url: string, init?: RequestInit) => ({
+      ok: true, json: async () => init?.method === 'POST'
+        ? { state: 'ok', validation: 'validating', efforts: ['low', 'high'], requests: 0 }
+        : statusBody,
+    }))
+    await act(async () => { button()[0]!.props.onClick() })
+    await act(async () => { button().find(node => node.children.join('') === en.probeConfirmAction)!.props.onClick() })
+    expect(buttonLabels()).toContain(en.probeNoteDismiss)
+    expect(JSON.stringify(view!.toJSON())).toContain('low / high')
+  })
+
+  it('shows completion without waiting for a hung credit/status refresh', async () => {
+    await mount()
+    request.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method !== 'POST') return new Promise(() => {})
+      return { ok: true, json: async () => ({ state: 'ok', validation: 'validating', efforts: ['high'] }) }
+    })
+    await act(async () => { button()[0]!.props.onClick() })
+    await act(async () => { button().find(node => node.children.join('') === en.probeConfirmAction)!.props.onClick() })
+    expect(buttonLabels()).toContain(en.probeNoteDismiss)
+    expect(button()[0]!.props['aria-busy']).toBe(false)
+  })
+
+  it('keeps a successful result when the following status request fails', async () => {
+    await mount()
+    request.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method !== 'POST') throw new Error('credit unavailable')
+      return { ok: true, json: async () => ({ state: 'ok', validation: 'validating', efforts: ['high'] }) }
+    })
+    await act(async () => { button()[0]!.props.onClick() })
+    await act(async () => { button().find(node => node.children.join('') === en.probeConfirmAction)!.props.onClick() })
+    expect(buttonLabels()).toContain(en.probeNoteDismiss)
+    expect(button()[0]!.props['aria-label']).not.toBe(en.probeTooltipRetry)
+  })
+
   it('reports a non-validating outcome instead of verified levels', async () => {
     // The stubbed POST answers `non-validating`.
     await mount()

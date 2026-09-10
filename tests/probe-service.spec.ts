@@ -11,7 +11,7 @@ import type { WorkBuddyUpstreamClient } from '../src/upstream.ts'
 describe('manual probe consent and deduplication', () => {
   const paths: string[] = []
   afterEach(() => { paths.splice(0).forEach(path => rmSync(path, { recursive: true, force: true })) })
-  function setup() {
+  function setup(consent = false) {
     const path = mkdtempSync(join(tmpdir(), 'wb-probe-service-'))
     paths.push(path)
     const catalog = new WorkBuddyCatalog()
@@ -21,7 +21,7 @@ describe('manual probe consent and deduplication', () => {
       store: new WorkBuddyProbeStore({ path: join(path, 'state.json'), pluginVersion: 'test' }),
       credentials: { current: async () => ({}) } as unknown as WorkBuddyCredentialStore,
       client: {} as WorkBuddyUpstreamClient,
-      consent: () => false,
+      consent: () => consent,
       send: () => send,
     })
     return { service, send }
@@ -38,6 +38,19 @@ describe('manual probe consent and deduplication', () => {
     const { service, send } = setup()
     const results = await Promise.all([service.probe('glm-5.2', true), service.probe('glm-5.2', true)])
     expect(results.map(result => result.state)).toEqual(['ok', 'ok'])
+    expect(send).toHaveBeenCalledTimes(2)
+  })
+  it('runs a fresh probe on each sequential manual confirmation', async () => {
+    const { service, send } = setup()
+    await service.probe('glm-5.2', true)
+    const result = await service.probe('glm-5.2', true)
+    expect(result).toMatchObject({ state: 'ok', requests: 2 })
+    expect(send).toHaveBeenCalledTimes(4)
+  })
+  it('still reuses historical results for authorized automatic requests', async () => {
+    const { service, send } = setup(true)
+    await service.probe('glm-5.2', true)
+    expect(await service.probe('glm-5.2')).toMatchObject({ state: 'ok', requests: 0 })
     expect(send).toHaveBeenCalledTimes(2)
   })
   it('rejects declared and unknown models before sending', async () => {

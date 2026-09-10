@@ -539,6 +539,7 @@ interface WorkBuddyProbeServiceOptions {
 declare class WorkBuddyProbeService {
   private readonly options;
   private queue;
+  private readonly pending;
   private running;
   constructor(options: WorkBuddyProbeServiceOptions);
   /** Whether a sweep is in flight right now. */
@@ -556,6 +557,7 @@ declare class WorkBuddyProbeService {
    * The authenticated manual route supplies one-request consent after UI
    * confirmation. Other callers must pass the configured consent gate.
    * Manual consent never changes the automatic-probing configuration.
+   * Explicit requests bypass historical results, but share an ongoing run.
    */
   probe(modelId: string, manualConsent?: boolean): Promise<WorkBuddyProbeStatus>;
 }

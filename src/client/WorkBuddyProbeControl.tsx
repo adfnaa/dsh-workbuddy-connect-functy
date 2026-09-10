@@ -35,42 +35,6 @@ export interface WorkBuddyProbeControlProps extends WorkBuddyPluginCardInjected 
 /** How often the control re-checks state when the window regains focus. */
 const RECONCILE_MS = 60_000
 
-/**
- * Where the "already read" marks live.
- *
- * Persisted rather than kept in component state: a detection the user already
- * read must not be announced again after a reload or a restart. A ref resets
- * with the page, so every restart would replay an old result as if it were
- * news. Browser-scoped on purpose — a different browser is a different reader.
- */
-const SEEN_STORAGE_KEY = 'dsh-workbuddy-probe-seen'
-
-/** Cap the stored marks so the list cannot grow without bound. */
-const SEEN_LIMIT = 200
-
-/** Read the persisted marks, tolerating absent or unparsable storage. */
-function readSeen(): Set<string> {
-  try {
-    const raw = window.localStorage.getItem(SEEN_STORAGE_KEY)
-    if (raw === null) return new Set()
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return new Set()
-    return new Set(parsed.filter((entry): entry is string => typeof entry === 'string'))
-  } catch {
-    // Storage disabled or corrupt: fall back to not-yet-seen, which at worst
-    // re-announces a result rather than dropping the announcement entirely.
-    return new Set()
-  }
-}
-
-/** Persist the marks, trimmed to the cap. */
-function writeSeen(marks: Set<string>): void {
-  try {
-    window.localStorage.setItem(SEEN_STORAGE_KEY, JSON.stringify([...marks].slice(-SEEN_LIMIT)))
-  } catch {
-    // A browser that refuses storage still works; it just re-announces on reload.
-  }
-}
 
 const wrapperStyle: CSSProperties = { display: 'inline-flex', position: 'relative', alignItems: 'center' }
 const buttonStyle: CSSProperties = {
@@ -258,26 +222,9 @@ function ModelProbe({ model, label, t }: { model: string; label: string } & Work
   const [confirming, setConfirming] = useState(false)
   const [tooltipVisible, setTooltipVisible] = useState(false)
   const [failed, setFailed] = useState(false)
-  // The result note: a small bubble announcing the probe outcome, dismissed by
-  // a "got it" button. It is independent of the hover tooltip (which describes
-  // the button's purpose) and of the confirmation bubble (which is the *input*
-  // affordance). Noted once per (model, probedAt) pair: a re-probe of the
-  // same model — by the user here, or by the card in another session — produces
-  // a new probedAt and is treated as a fresh result, so the user is told
-  // again; clicking "got it" only suppresses that one outcome.
-  const [note, setNote] = useState<{ result: WorkBuddyWebProbeModel; mark: string } | undefined>()
-  // Marks this browser has already shown. Persisted, so a reload or a restart
-  // does not replay an old detection as news.
-  const seen = useRef<Set<string> | undefined>(undefined)
-  // The probe this control last started, if any: which model, and when, on the
-  // same clock the host stamps results with.
-  //
-  // Both fields are needed. A bare boolean was consumed by the 60s reconcile
-  // poll delivering some *other* model's result mid-flight, which left the
-  // user's own outcome unannounced; a bare timestamp was not enough either,
-  // since the poll's result for a different model can still be newer than the
-  // click. Matching on id *and* `probedAt` identifies exactly one run's output.
-  const selfStarted = useRef<{ id: string; atMs: number } | undefined>(undefined)
+  // Only an explicit detection response opens a note. Background reads and
+  // remounts never replay stored results; no persisted "seen" marks are needed.
+  const [note, setNote] = useState<WorkBuddyWebProbeModel>()
   const inFlight = useRef(false)
   const mounted = useRef(false)
   const tooltipId = useId()
@@ -319,36 +266,13 @@ function ModelProbe({ model, label, t }: { model: string; label: string } & Work
   // entry visible for it: that is the case the tooltip reports a result in.
   const visible = eligible || result !== undefined
 
-  // A selection change must not strand an open bubble. It no longer clears the
-  // seen marks: switching away and back is not a reason to re-announce a result
-  // the user already read.
+  // A selection change must not strand an open bubble.
   useEffect(() => { setConfirming(false); setNote(undefined) }, [model])
-  useEffect(() => {
-    if (result === undefined) {
-      setNote(undefined)
-      return
-    }
-    const mark = `${model}:${result.id}:${result.probedAt}`
-    seen.current ??= readSeen()
-    if (seen.current.has(mark)) return
-    // Not yet read. Announce it only when this control's own run produced it:
-    // same model, and stamped no earlier than the click.
-    const started = selfStarted.current
-    if (started === undefined || started.id !== model || result.probedAt < started.atMs) {
-      seen.current.add(mark)
-      writeSeen(seen.current)
-      return
-    }
-    selfStarted.current = undefined
-    setNote({ result, mark })
-  }, [result, model])
 
   const detect = async (): Promise<void> => {
     if (key === undefined || inFlight.current || probe?.running === true) return
     inFlight.current = true
-    // Record the start before the request, so the effect can tell this run's
-    // result from one the reconcile poll may deliver meanwhile.
-    selfStarted.current = { id: model, atMs: Date.now() }
+    setNote(undefined)
     setConfirming(false)
     setBusy(true)
     setFailed(false)
@@ -359,9 +283,25 @@ function ModelProbe({ model, label, t }: { model: string; label: string } & Work
         headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Probe-Key': key },
         body: JSON.stringify({ action: 'probe', model }),
       })
-      const body = await response.json() as { state?: string }
-      if (!response.ok || body.state !== 'ok') throw new Error('probe failed')
-      await refresh()
+      const body = await response.json() as {
+        state?: string; validation?: string; efforts?: unknown
+      }
+      if (!response.ok || body.state !== 'ok'
+        || (body.validation !== 'validating' && body.validation !== 'non-validating')
+        || !Array.isArray(body.efforts) || !body.efforts.every(effort => typeof effort === 'string')) {
+        throw new Error('probe failed')
+      }
+      // This response belongs to the explicit click, even when the host reused
+      // an older cached result. Do not wait for /status (which fetches credit),
+      // or infer completion from wall-clock timestamps and background polls.
+      if (mounted.current) {
+        const completed: WorkBuddyWebProbeModel = {
+          id: model, name: model, validation: body.validation,
+          efforts: body.efforts, probedAt: Date.now(),
+        }
+        setNote(completed)
+      }
+      void refresh().catch(() => { /* Credit/status failure does not undo a completed probe. */ })
     } catch {
       if (mounted.current) setFailed(true)
     } finally {
@@ -428,16 +368,11 @@ function ModelProbe({ model, label, t }: { model: string; label: string } & Work
 
       {note === undefined ? null : (
         <span role="status" aria-live="polite" style={noteStyle}>
-          <span>{noteText(t, note.result)}</span>
+          <span>{noteText(t, note)}</span>
           <button
             type="button"
             style={noteDismissStyle}
             onClick={() => {
-              // Persist the mark: dismissing means "read", and that survives a
-              // reload — otherwise every restart would announce it again.
-              seen.current ??= readSeen()
-              seen.current.add(note.mark)
-              writeSeen(seen.current)
               setNote(undefined)
             }}
           >

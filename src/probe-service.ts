@@ -44,6 +44,7 @@ export interface WorkBuddyProbeServiceOptions {
 export class WorkBuddyProbeService {
   private readonly options: WorkBuddyProbeServiceOptions
   private queue: Promise<unknown> = Promise.resolve()
+  private readonly pending = new Map<string, Promise<WorkBuddyProbeStatus>>()
   private running = false
 
   constructor(options: WorkBuddyProbeServiceOptions) {
@@ -76,6 +77,7 @@ export class WorkBuddyProbeService {
    * The authenticated manual route supplies one-request consent after UI
    * confirmation. Other callers must pass the configured consent gate.
    * Manual consent never changes the automatic-probing configuration.
+   * Explicit requests bypass historical results, but share an ongoing run.
    */
   async probe(modelId: string, manualConsent = false): Promise<WorkBuddyProbeStatus> {
     if (!manualConsent && !this.options.consent()) {
@@ -83,6 +85,8 @@ export class WorkBuddyProbeService {
     }
     const info = this.options.catalog.current().find(model => model.id === modelId)
     if (info === undefined) return { state: 'unavailable', reason: `unknown model: ${modelId}` }
+    const pending = this.pending.get(modelId)
+    if (pending !== undefined) return pending
 
     const run = this.queue.then(async (): Promise<WorkBuddyProbeStatus> => {
       // Re-read inside the queue: an earlier sweep may have changed the catalog
@@ -96,7 +100,7 @@ export class WorkBuddyProbeService {
         return { state: 'unavailable', reason: 'model does not need detection' }
       }
       const cached = this.recordFor(modelId)
-      if (cached !== undefined && cached.validation !== 'unknown') {
+      if (!manualConsent && cached !== undefined && cached.validation !== 'unknown') {
         return { state: 'ok', validation: cached.validation, efforts: cached.efforts, requests: 0 }
       }
 
@@ -128,6 +132,11 @@ export class WorkBuddyProbeService {
     // Keep the chain alive regardless of this run's outcome, so one failure does
     // not poison every later probe.
     this.queue = run.catch(() => undefined)
-    return run
+    this.pending.set(modelId, run)
+    try {
+      return await run
+    } finally {
+      this.pending.delete(modelId)
+    }
   }
 }
