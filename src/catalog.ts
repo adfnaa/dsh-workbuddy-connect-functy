@@ -23,10 +23,12 @@ export type WorkBuddyModelInfo = WorkBuddyUpstreamModel
  * disabled — and the `free` flag follows the upstream `x0.00` credits marker.
  */
 export const FALLBACK_WORKBUDDY_MODELS: readonly WorkBuddyModelInfo[] = [
-  // Old-form reasoning rows (`{effort, summary}`, no `supportedEfforts`): the
-  // upstream does not restrict their effort ladder, and most reject `off`, so
-  // they carry a default effort, `canDisableThinking: false`, and no explicit
-  // effort set (the adapter offers the full standard ladder).
+  // Old-form reasoning rows (`{effort, summary}`, no `supportedEfforts`): they
+  // carry only a default effort, no selectable set, and `canDisableThinking:
+  // false`. The adapter deliberately offers these rows no thinking control —
+  // declared-set-only policy, see `reasoningFields()` in adapter.ts — so their
+  // requests never carry `reasoning_effort` and the upstream applies its own
+  // default.
   { id: 'auto', name: 'Auto', contextWindow: 168_000, maxTokens: 32_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, defaultEffort: 'high', canDisableThinking: false }, billing: { free: false } },
   { id: 'hy3', name: 'Hy3', contextWindow: 192_000, maxTokens: 64_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, defaultEffort: 'high', canDisableThinking: false }, billing: { credits: 'x0.00', badges: ['限时免费'], free: true } },
   { id: 'glm-5.2', name: 'GLM-5.2', contextWindow: 1_000_000, maxTokens: 48_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, defaultEffort: 'medium', canDisableThinking: false }, billing: { credits: 'x0.79 credits', badges: ['夜间折扣'], free: false } },
