@@ -113,20 +113,12 @@ export interface Config {
    * until the user explicitly agrees.
    */
   probeConsent?: boolean
-  /**
-   * Whether new or changed undeclared models are probed automatically after a
-   * catalog refresh. Separate from `probeConsent` on purpose — agreeing to a
-   * one-off probe must not silently enroll the user in a standing sweep.
-   */
-  probeAuto?: boolean
 }
 
 export const Config: z<Config> = z.object({
   authFile: z.string().description('WorkBuddy desktop auth file (defaults to the app\'s own location)'),
   probeConsent: z.boolean().default(false)
     .description('Authorize reasoning-effort probes (each probe sends real requests that may consume credit)'),
-  probeAuto: z.boolean().default(false)
-    .description('Probe new or changed undeclared models automatically after a catalog refresh'),
 })
 
 /**
@@ -200,7 +192,6 @@ export function apply(ctx: Context, config: Config): void {
     })
     return {
       consent: config.probeConsent === true,
-      auto: config.probeAuto === true,
       running: probeService.isRunning(),
       candidates: models.filter(isProbeCandidate).map(info => info.id),
       // Newest first: a detection the user just ran belongs at the top, not

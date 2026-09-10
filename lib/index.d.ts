@@ -655,12 +655,6 @@ interface Config {
    * until the user explicitly agrees.
    */
   probeConsent?: boolean;
-  /**
-   * Whether new or changed undeclared models are probed automatically after a
-   * catalog refresh. Separate from `probeConsent` on purpose — agreeing to a
-   * one-off probe must not silently enroll the user in a standing sweep.
-   */
-  probeAuto?: boolean;
 }
 declare const Config: z<Config>;
 /**

@@ -28,8 +28,6 @@ export interface WorkBuddyWebProbeModel {
 export interface WorkBuddyWebProbeSection {
   /** Whether the user has authorized probing. */
   consent: boolean
-  /** Whether new/changed models are probed automatically. */
-  auto: boolean
   /** Whether a sweep is in flight right now. */
   running: boolean
   /** Models the user could probe by hand (undeclared yet reasoning-capable). */

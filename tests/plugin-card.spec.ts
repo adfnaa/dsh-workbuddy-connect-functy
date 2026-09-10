@@ -33,7 +33,6 @@ describe('WorkBuddy plugin card', () => {
       models: [],
       probe: {
         consent: true,
-        auto: false,
         running: false,
         candidates: ['hy3', 'glm-5.2', 'minimax-m3'],
         results: [],

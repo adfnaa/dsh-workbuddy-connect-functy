@@ -271,8 +271,7 @@ function formatTokens(tokens: number): string {
  *
  * Two deliberate UX rules from the plan (§3.1, §3.2):
  * - the confirmation is shown *before* any request, and its copy states the
- *   request count and the credit caveat rather than the auto-detect switch
- *   silently enrolling the user;
+ *   credit caveat;
  * - a `non-validating` result is presented as an observation about the
  *   parameter ("this model does not check it"), never as a statement that a
  *   level is unsupported.
@@ -320,7 +319,6 @@ function ProbeSection({ probe, t, onDetect, onClear, busy }: {
       <h3 style={quotaTitleStyle}>{t('probeHeading')}</h3>
       <p style={bodyStyle}>{t('probeIntro')}</p>
       <p style={bodyStyle}>{t('probeConsentHint')}</p>
-      {probe.auto ? <p style={bodyStyle}>{t('probeAutoHint')}</p> : null}
       {probe.running ? <p style={bodyStyle}>{t('probeRunningGeneric')}</p> : null}
       {/*
         * One row per probeable model, each carrying its own state and button.

@@ -45,7 +45,7 @@ describe('Composer model probe', () => {
     statusBody = {
       status: 'signed-in',
       probeKey: 'test-key',
-      probe: { consent: true, auto: false, running: false, candidates: ['glm-5.2', 'auto'], results: [], ...overrides },
+      probe: { consent: true, running: false, candidates: ['glm-5.2', 'auto'], results: [], ...overrides },
     }
   }
 
