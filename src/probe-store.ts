@@ -246,3 +246,15 @@ export class WorkBuddyProbeStore {
     }
   }
 }
+
+/**
+ * Order observations newest-first for display.
+ *
+ * The store keeps insertion order so the file reads chronologically, but the
+ * card wants the most recent detection at the top: a sweep the user just ran
+ * should not appear below every earlier one, which is what appending to an
+ * insertion-ordered list does.
+ */
+export function newestFirst<T extends { probedAt: number }>(records: readonly T[]): T[] {
+  return [...records].sort((a, b) => b.probedAt - a.probedAt)
+}

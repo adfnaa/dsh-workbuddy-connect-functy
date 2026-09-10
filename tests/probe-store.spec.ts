@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { FALLBACK_WORKBUDDY_MODELS, WorkBuddyCatalog } from '../src/catalog.ts'
-import { fingerprintModel, WorkBuddyProbeStore } from '../src/probe-store.ts'
+import { fingerprintModel, newestFirst, WorkBuddyProbeStore } from '../src/probe-store.ts'
 import { WorkBuddyProbeService } from '../src/probe-service.ts'
 import type { WorkBuddyModelInfo } from '../src/catalog.ts'
 
@@ -163,5 +163,69 @@ describe('WorkBuddyProbeService precedence', () => {
     const status = await probe.probe('auto')
     expect(status.state).toBe('unavailable')
     expect(status.state === 'unavailable' && status.reason).toContain('not authorized')
+  })
+})
+
+describe('newestFirst', () => {
+  it('puts the most recent observation first', () => {
+    // The store appends, so a just-run detection would otherwise land below
+    // every earlier one — the exact complaint this helper exists to fix.
+    const ordered = newestFirst([
+      { probedAt: 100, id: 'oldest' },
+      { probedAt: 300, id: 'newest' },
+      { probedAt: 200, id: 'middle' },
+    ])
+    expect(ordered.map(entry => entry.id)).toEqual(['newest', 'middle', 'oldest'])
+  })
+
+  it('does not mutate its input', () => {
+    const input = [{ probedAt: 1 }, { probedAt: 2 }]
+    newestFirst(input)
+    expect(input.map(entry => entry.probedAt)).toEqual([1, 2])
+  })
+})
+
+describe('recordFor: the single judgement the card and adapter share', () => {
+  /**
+   * The card used to read raw records while the adapter read fingerprint- and
+   * TTL-checked ones, so the card could show levels the model picker no longer
+   * offered. Both now go through `recordFor`, and these pin what it refuses.
+   */
+  function serviceFor(store: WorkBuddyProbeStore): WorkBuddyProbeService {
+    return new WorkBuddyProbeService({
+      store,
+      catalog: new WorkBuddyCatalog(),
+      credentials: { current: async () => undefined } as never,
+      client: {} as never,
+      consent: () => true,
+    })
+  }
+
+  it('refuses a record whose catalog row changed', () => {
+    const { store } = tempStore()
+    const service = serviceFor(store)
+    // Recorded against a fingerprint that no longer describes the row.
+    store.set('auto', store.record('stale-fingerprint', 'validating', ['low']))
+    expect(service.recordFor('auto')).toBeUndefined()
+  })
+
+  it('refuses an expired record even though the store still holds it', () => {
+    let now = 1_000_000
+    const { store } = tempStore(() => now)
+    const service = serviceFor(store)
+    store.set('auto', store.record(fingerprintModel(AUTO), 'validating', ['low']))
+    expect(service.recordFor('auto')?.efforts).toEqual(['low'])
+
+    now += 15 * 24 * 60 * 60 * 1000
+    // Past the TTL the card must stop reporting it, exactly as the adapter does.
+    expect(service.recordFor('auto')).toBeUndefined()
+  })
+
+  it('refuses a record for a model the catalog no longer lists', () => {
+    const { store } = tempStore()
+    const service = serviceFor(store)
+    // A row recorded for an id the upstream has since dropped.
+    store.set('retired-model', store.record('whatever', 'validating', ['low']))
+    expect(service.recordFor('retired-model')).toBeUndefined()
   })
 })

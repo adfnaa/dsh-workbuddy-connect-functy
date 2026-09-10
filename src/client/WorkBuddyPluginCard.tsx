@@ -89,27 +89,38 @@ const confirmBoxStyle: CSSProperties = {
 }
 const confirmRowStyle: CSSProperties = { display: 'flex', justifyContent: 'flex-end', gap: 8 }
 
-/** Hover breakdown of the models that are not at the common capacity. */
-const contextTipStyle: CSSProperties = {
-  position: 'absolute',
-  right: 0,
-  top: 'calc(100% + 6px)',
-  zIndex: 20,
+/** One probeable model's row: name on the left, state and action on the right. */
+const probeRowStyle: CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }
+const probeRowEndStyle: CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 8, flex: '0 0 auto' }
+
+/**
+ * Tab strip for the card body. Kept visually light — a full pill would compete
+ * with the section headings, and the card is already the densest surface the
+ * plugin owns.
+ */
+const tabBarStyle: CSSProperties = {
   display: 'flex',
-  flexDirection: 'column',
   gap: 4,
-  minWidth: 200,
-  padding: '8px 10px',
-  border: '1px solid var(--dsw-alias-border-l2)',
-  borderRadius: 8,
-  background: 'var(--dsw-alias-bg-layer-1)',
-  boxShadow: 'var(--dsw-shadow-lv2)',
-  color: 'var(--dsw-alias-label-primary)',
-  fontSize: 12,
-  lineHeight: '18px',
-  cursor: 'default',
+  marginTop: 4,
+  borderBottom: '1px solid var(--dsw-alias-border-l2)',
 }
-const contextTipRowStyle: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 16 }
+const tabStyle: CSSProperties = {
+  padding: '6px 12px',
+  border: 0,
+  borderBottom: '2px solid transparent',
+  background: 'transparent',
+  color: 'var(--dsw-alias-label-tertiary)',
+  font: 'inherit',
+  fontSize: 13,
+  lineHeight: '20px',
+  cursor: 'pointer',
+}
+const tabActiveStyle: CSSProperties = {
+  borderBottom: '2px solid var(--dsw-alias-brand-primary)',
+  color: 'var(--dsw-alias-label-primary)',
+  fontWeight: 600,
+}
+const tabPanelStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 18, paddingTop: 16 }
 
 /**
  * Primary action of the inline confirmation. Fill and text colour come from the
@@ -208,67 +219,37 @@ function ModelOfferRow({ model, t }: {
 }
 
 /**
- * Context capacity, summarized.
+ * Context capacity, listed in full.
  *
- * A per-model list would be mostly noise: seven of fifteen models sit at the
- * same 1M, so a fifteen-row block spends its height repeating one number. What
- * actually matters is *which models are not 1M*, because that is what silently
- * ends a long conversation (a 200k model looks identical in the picker to its
- * 1M siblings).
+ * Every model the upstream reports a capacity for, largest first. A one-line
+ * summary with the exceptions on hover was tried and rejected: capacity is
+ * reference data you scan by model, and hiding most of it behind a hover made
+ * the common case (a model you already have in mind) the hard one to look up.
  *
- * So: one line stating the common case, with the full breakdown on hover —
- * the same disclosure pattern the Composer's probe entry uses. Purely a report
- * of the upstream's own number; the plugin offers no tier picker, because the
- * catalog declares one capacity per model and publishes no alternatives.
+ * Purely a report of the upstream's own number. The plugin offers no tier
+ * picker: the catalog declares one capacity per model and publishes no
+ * alternatives, so a menu would mean inventing client-side policy. (The
+ * desktop app's "300K / 1M" selector appears nowhere in the API.)
  */
-function ContextSummary({ models, t }: {
+function ContextTable({ models, t }: {
   models: readonly WorkBuddyWebModelBadge[] | undefined
   t: WorkBuddyPluginCardInjected['t']
 }): React.ReactNode {
-  const [open, setOpen] = useState(false)
-  const known = (models ?? []).filter(model => model.contextWindow !== undefined)
+  const known = (models ?? [])
+    .filter(model => model.contextWindow !== undefined)
+    // Largest first: the big windows are the ones a user reaches for, and the
+    // small ones are then easy to spot at the end.
+    .sort((a, b) => (b.contextWindow as number) - (a.contextWindow as number))
   if (known.length === 0) return null
-
-  // The most common capacity is the "normal" case; everything else is the
-  // exception worth naming.
-  const counts = new Map<number, number>()
-  for (const model of known) counts.set(model.contextWindow as number, (counts.get(model.contextWindow as number) ?? 0) + 1)
-  const [common] = [...counts.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0] as [number, number]
-  const exceptions = known.filter(model => model.contextWindow !== common)
-  const commonCount = counts.get(common) ?? 0
-  const summary = exceptions.length === 0
-    ? t('contextAllSame', { tokens: formatTokens(common) })
-    : t('contextMixed', { tokens: formatTokens(common), count: commonCount, total: known.length })
-
   return (
     <div style={quotaListStyle}>
       <h3 style={quotaTitleStyle}>{t('contextHeading')}</h3>
-      <span
-        style={{ ...quotaLabelStyle, position: 'relative', cursor: 'help' }}
-        onMouseEnter={() => { setOpen(true) }}
-        onMouseLeave={() => { setOpen(false) }}
-      >
-        <span>{summary}</span>
-        <span style={{ ...modelRateStyle, display: 'inline-flex', alignItems: 'center', gap: 2 }}>
-          {t('contextHoverHint')}
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            strokeWidth="2" aria-hidden="true" focusable="false">
-            <circle cx="12" cy="12" r="9" />
-            <path d="M12 16v-5M12 8h.01" />
-          </svg>
-        </span>
-        {open ? (
-          <span role="tooltip" style={contextTipStyle}>
-            <span style={{ fontWeight: 600 }}>{t('contextTipHeading')}</span>
-            {exceptions.map(model => (
-              <span key={model.id} style={contextTipRowStyle}>
-                <span>{model.name}</span>
-                <span>{formatTokens(model.contextWindow as number)}</span>
-              </span>
-            ))}
-          </span>
-        ) : null}
-      </span>
+      {known.map(model => (
+        <div key={model.id} style={quotaLabelStyle}>
+          <span>{model.name}</span>
+          <span>{formatTokens(model.contextWindow as number)}</span>
+        </div>
+      ))}
     </div>
   )
 }
@@ -307,11 +288,33 @@ function ProbeSection({ probe, t, onDetect, onClear, busy }: {
   // reason the Composer entry uses a bubble: a modal alert for a one-line
   // decision is heavier than the action it guards.
   const [pending, setPending] = useState<string>()
+  // Which model this card last asked to detect. `busy` alone cannot answer
+  // that — it is true for any in-flight request — so the running label needs
+  // the id, otherwise every candidate button claims to be running at once.
+  const [runningModel, setRunningModel] = useState<string>()
   // A sweep that finishes (or a catalogue change that removes the candidate)
   // must not leave a stale confirmation behind.
   useEffect(() => {
     if (pending !== undefined && !probe.candidates.includes(pending)) setPending(undefined)
   }, [pending, probe.candidates])
+  // Clear the running label once the request settles.
+  //
+  // Keyed on `busy` alone this would fire immediately: the click that starts a
+  // detection sets `runningModel` and `busy` in one batch, and an effect that
+  // only checks `!busy` can still observe the pre-update value. So the label is
+  // armed on the way up and released only after the run has actually been seen
+  // in flight.
+  const runningArmed = useRef(false)
+  useEffect(() => {
+    if (runningModel === undefined) return
+    if (busy || probe.running) {
+      runningArmed.current = true
+      return
+    }
+    if (!runningArmed.current) return
+    runningArmed.current = false
+    setRunningModel(undefined)
+  }, [runningModel, busy, probe.running])
   return (
     <div style={quotaListStyle}>
       <h3 style={quotaTitleStyle}>{t('probeHeading')}</h3>
@@ -319,64 +322,88 @@ function ProbeSection({ probe, t, onDetect, onClear, busy }: {
       <p style={bodyStyle}>{t('probeConsentHint')}</p>
       {probe.auto ? <p style={bodyStyle}>{t('probeAutoHint')}</p> : null}
       {probe.running ? <p style={bodyStyle}>{t('probeRunningGeneric')}</p> : null}
-
-      {probe.results.length === 0 ? null : (
-        <div style={quotaGroupStyle}>
-          {probe.results.map(result => (
-            <div key={result.id} style={modelOfferStyle}>
-              <div style={quotaLabelStyle}>
-                <span>{result.name}</span>
-                <span style={modelBadgeStyle}>
-                  {result.validation === 'validating' && result.efforts.length > 0
-                    ? <span style={modelBadgeChipStyle}>{result.efforts.join(' / ')}</span>
-                    : <span style={modelBadgeChipStyle}>{t(result.validation === 'non-validating' ? 'probeResultNotValidating' : 'probeResultUnknown')}</span>}
-                </span>
-              </div>
-              <span style={modelRateStyle}>{t('probeResultAt', { time: formatTime(result.probedAt) })}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
+      {/*
+        * One row per probeable model, each carrying its own state and button.
+        *
+        * Previously the buttons lived in a block above the results, so a model
+        * that had been detected left the button list and reappeared only as a
+        * result below — re-running it meant clearing every other result. Rows
+        * keep the model and its action together, and the order is fixed by the
+        * catalog, so nothing moves when a detection lands.
+        */}
       {probe.candidates.length === 0
         ? <p style={bodyStyle}>{t('probeResultEmpty')}</p>
         : (
           <div style={quotaGroupStyle}>
-            <p style={bodyStyle}>{t('probeCandidates', { count: probe.candidates.length })}</p>
-            <div style={modelBadgeStyle}>
-              {probe.candidates.map(id => (
-                <button
-                  key={id}
-                  type="button"
-                  style={buttonStyle}
-                  disabled={probe.running || busy}
-                  onClick={() => { setPending(id) }}
-                >
-                  {busy ? t('probeRunning', { model: id }) : `${t('probeStart')}: ${id}`}
-                </button>
-              ))}
-            </div>
+            {probe.candidates.map(id => {
+              const result = probe.results.find(entry => entry.id === id)
+              const name = result?.name ?? id
+              return (
+                <div key={id} style={modelOfferStyle}>
+                  <div style={probeRowStyle}>
+                    <span>{name}</span>
+                    <span style={probeRowEndStyle}>
+                      {result === undefined ? null : (
+                        <span style={modelBadgeChipStyle}>
+                          {result.validation === 'validating' && result.efforts.length > 0
+                            ? result.efforts.join(' / ')
+                            : t(result.validation === 'non-validating' ? 'probeResultNotValidating' : 'probeResultUnknown')}
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        style={buttonStyle}
+                        disabled={probe.running || busy}
+                        onClick={() => { setPending(id) }}
+                      >
+                        {/*
+                          * Only the button that was actually pressed reports
+                          * progress; the card-wide `busy` flag is true for any
+                          * in-flight request, so it cannot pick the label.
+                          */}
+                        {runningModel === id
+                          ? t('probeRunning', { model: id })
+                          : t(result === undefined ? 'probeStart' : 'probeRedetect')}
+                      </button>
+                    </span>
+                  </div>
+                  {result === undefined ? null
+                    : <span style={modelRateStyle}>{t('probeResultAt', { time: formatTime(result.probedAt) })}</span>}
+                  {/*
+                    * The confirmation expands inside the row it belongs to.
+                    * Rendered after the whole list it sat at the bottom of a
+                    * long candidate list, so the question ("send requests to
+                    * this model?") was a screen away from the button that
+                    * asked it. In-flow placement keeps them together and needs
+                    * no positioning or overflow handling.
+                    */}
+                  {pending === id ? (
+                    <div style={confirmBoxStyle}>
+                      <p style={bodyStyle}>{t('probeConfirmBody', { model: name })}</p>
+                      <div style={confirmRowStyle}>
+                        <button type="button" style={buttonStyle} onClick={() => { setPending(undefined) }}>
+                          {t('cancel')}
+                        </button>
+                        <button
+                          type="button"
+                          style={primaryButtonStyle}
+                          disabled={probe.running || busy}
+                          onClick={() => {
+                            setRunningModel(id)
+                            setPending(undefined)
+                            onDetect(id)
+                          }}
+                        >
+                          {t('probeConfirmAction')}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              )
+            })}
           </div>
         )}
-
-      {pending === undefined ? null : (
-        <div style={confirmBoxStyle}>
-          <p style={bodyStyle}>{t('probeConfirmBody', { model: pending })}</p>
-          <div style={confirmRowStyle}>
-            <button type="button" style={buttonStyle} onClick={() => { setPending(undefined) }}>
-              {t('cancel')}
-            </button>
-            <button
-              type="button"
-              style={primaryButtonStyle}
-              disabled={probe.running || busy}
-              onClick={() => { setPending(undefined); onDetect(pending) }}
-            >
-              {t('probeConfirmAction')}
-            </button>
-          </div>
-        </div>
-      )}
 
       {probe.results.length === 0 ? null : (
         <button type="button" style={buttonStyle} disabled={busy} onClick={() => { onClear() }}>
@@ -393,6 +420,11 @@ export function WorkBuddyPluginCard({ t }: WorkBuddyPluginCardProps) {
   const [open, setOpen] = useState(false)
   const [status, setStatus] = useState<WorkBuddyWebStatus>({ status: 'signed-out' })
   const [busy, setBusy] = useState(false)
+  // Three tabs. Default is the live status plus the one action the card
+  // carries; the two reference sets — context capacity, then rates and the
+  // per-package breakdown — are deliberate visits, since neither changes while
+  // you watch.
+  const [tab, setTab] = useState<'status' | 'context' | 'details'>('status')
   const mounted = useRef(true)
 
   useEffect(() => {
@@ -524,44 +556,91 @@ export function WorkBuddyPluginCard({ t }: WorkBuddyPluginCardProps) {
               ? <>
                   {status.expiresAt === undefined ? null
                     : <p style={bodyStyle}>{t('accessTokenExpires', { time: formatTime(status.expiresAt) })}</p>}
-                  {status.credits === undefined ? null : (
-                    <div style={quotaListStyle}>
-                      <div style={rowStyle}>
-                        <h3 style={quotaTitleStyle}>{t('creditsHeading')}</h3>
-                        <span style={bodyStyle}>{t('creditsTotal', { total: formatNumber(status.credits.total) })}</span>
-                      </div>
-                      {status.credits.accounts
-                        .filter(account => account.remain > 0)
-                        .map((account, index) => (
-                        <CreditBar
-                          key={`${account.packageName}-${String(index)}`}
-                          label={account.packageName}
-                          remain={account.remain}
-                          size={account.size}
+                  {/*
+                    * Three tabs, split by what the reader came for.
+                    *
+                    * 1. Status — the live facts and the one action the card
+                    *    carries: account, total credit, and reasoning-level
+                    *    detection. Detection belongs beside the status because
+                    *    it is something you *do* to the model in front of you,
+                    *    not reference material you go looking for.
+                    * 2. Context — every model's capacity, listed in full.
+                    * 3. Details — the rate reference: per-package credit and
+                    *    the per-model discount list.
+                    *
+                    * Previously this was one column, which buried the context
+                    * window below several rows of per-model discounts: the
+                    * least time-sensitive content sat above the most
+                    * decision-relevant.
+                    */}
+                  <div role="tablist" style={tabBarStyle}>
+                    {(['status', 'context', 'details'] as const).map(id => (
+                      <button
+                        key={id}
+                        type="button"
+                        role="tab"
+                        aria-selected={tab === id}
+                        onClick={() => { setTab(id) }}
+                        style={{ ...tabStyle, ...(tab === id ? tabActiveStyle : {}) }}
+                      >
+                        {t(id === 'status' ? 'tabStatus' : id === 'context' ? 'tabContext' : 'tabDetails')}
+                      </button>
+                    ))}
+                  </div>
+
+                  {tab === 'status' ? (
+                    <div style={tabPanelStyle}>
+                      {status.credits === undefined ? null : (
+                        <div style={quotaListStyle}>
+                          <div style={rowStyle}>
+                            <h3 style={quotaTitleStyle}>{t('creditsHeading')}</h3>
+                            <span style={bodyStyle}>{t('creditsTotal', { total: formatNumber(status.credits.total) })}</span>
+                          </div>
+                        </div>
+                      )}
+                      {status.creditsError === undefined ? null
+                        : <p style={errorStyle}>{t('creditsError', { message: status.creditsError })}</p>}
+                      {status.probe === undefined ? null : (
+                        <ProbeSection
+                          probe={status.probe}
                           t={t}
+                          busy={busy}
+                          onDetect={confirmDetect}
+                          onClear={() => { void control({ action: 'clear' }) }}
                         />
-                      ))}
+                      )}
                     </div>
-                  )}
-                  {status.creditsError === undefined ? null
-                    : <p style={errorStyle}>{t('creditsError', { message: status.creditsError })}</p>}
-                  {status.models === undefined || status.models.length === 0 ? null : (
-                    <div style={quotaListStyle}>
-                      <h3 style={quotaTitleStyle}>{t('modelsHeading')}</h3>
-                      {status.models
-                        .filter(model => model.free === true || (model.badges?.length ?? 0) > 0)
-                        .map(model => <ModelOfferRow key={model.id} model={model} t={t} />)}
+                  ) : tab === 'context' ? (
+                    <div style={tabPanelStyle}>
+                      <ContextTable models={status.models} t={t} />
                     </div>
-                  )}
-                  <ContextSummary models={status.models} t={t} />
-                  {status.probe === undefined ? null : (
-                    <ProbeSection
-                      probe={status.probe}
-                      t={t}
-                      busy={busy}
-                      onDetect={confirmDetect}
-                      onClear={() => { void control({ action: 'clear' }) }}
-                    />
+                  ) : (
+                    <div style={tabPanelStyle}>
+                      {status.credits === undefined ? null : (
+                        <div style={quotaListStyle}>
+                          <h3 style={quotaTitleStyle}>{t('creditsDetailHeading')}</h3>
+                          {status.credits.accounts
+                            .filter(account => account.remain > 0)
+                            .map((account, index) => (
+                            <CreditBar
+                              key={`${account.packageName}-${String(index)}`}
+                              label={account.packageName}
+                              remain={account.remain}
+                              size={account.size}
+                              t={t}
+                            />
+                          ))}
+                        </div>
+                      )}
+                      {status.models === undefined || status.models.length === 0 ? null : (
+                        <div style={quotaListStyle}>
+                          <h3 style={quotaTitleStyle}>{t('modelsHeading')}</h3>
+                          {status.models
+                            .filter(model => model.free === true || (model.badges?.length ?? 0) > 0)
+                            .map(model => <ModelOfferRow key={model.id} model={model} t={t} />)}
+                        </div>
+                      )}
+                    </div>
                   )}
                 </>
               : null}

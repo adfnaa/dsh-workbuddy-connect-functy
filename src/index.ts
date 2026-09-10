@@ -14,7 +14,7 @@ import { WorkBuddyCatalog } from './catalog.ts'
 import { createWorkBuddyAdapter, WORKBUDDY_PROVIDER } from './adapter.ts'
 import { createWorkBuddyShim } from './shim.ts'
 import { WorkBuddyProbeService } from './probe-service.ts'
-import { WorkBuddyProbeStore } from './probe-store.ts'
+import { newestFirst, WorkBuddyProbeStore } from './probe-store.ts'
 import { WorkBuddyUpstreamClient } from './upstream.ts'
 import { registerWorkBuddyStatusRoute } from './web-status.ts'
 import { createProbeKey, registerWorkBuddyProbeRoute } from './probe-route.ts'
@@ -162,32 +162,50 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   /**
-   * Whether a model is a manual-probe candidate: it reasons, the upstream
-   * declares no effort set for it, and no live observation has answered it.
+   * Whether a model can be probed by hand: it reasons and the upstream declares
+   * no effort set for it.
+   *
+   * Deliberately *not* filtered by whether a result already exists. Dropping a
+   * model once it has been detected made the list shrink with use, so
+   * re-detecting one model — after an upstream change, say — meant clearing
+   * every other result first. The list stays stable and the card marks which
+   * entries already have an answer.
    */
   const isProbeCandidate = (info: WorkBuddyModelInfo): boolean => {
     if (info.reasoning?.supports !== true) return false
-    if ((info.reasoning.supportedEfforts?.length ?? 0) > 0) return false
-    const record = probeService.recordFor(info.id)
-    return record === undefined || record.validation === 'unknown'
+    return (info.reasoning.supportedEfforts?.length ?? 0) === 0
   }
 
   /** Compact probe state for the card: consent, candidates, observations. */
   const probeSection = (): WorkBuddyWebProbeSection => {
     const config = current()
-    const records = probeStore.all()
+    const models = catalog.current()
+    // Read results through the *same* judgement the adapter uses, rather than
+    // straight from the store. A raw record can be stale in ways the adapter
+    // already discounts — its catalog row changed, it aged past the TTL, or the
+    // upstream has since declared an effort set (which always wins) — and
+    // showing one would have the card promise levels the model picker does not
+    // offer. A model the upstream dropped leaves the catalog entirely, so it
+    // drops out here too.
+    const results = models.flatMap(info => {
+      const record = probeService.recordFor(info.id)
+      if (record === undefined) return []
+      return [{
+        id: info.id,
+        name: info.name,
+        validation: record.validation,
+        efforts: record.efforts,
+        probedAt: record.probedAtMs,
+      }]
+    })
     return {
       consent: config.probeConsent === true,
       auto: config.probeAuto === true,
       running: probeService.isRunning(),
-      candidates: catalog.current().filter(isProbeCandidate).map(info => info.id),
-      results: Object.entries(records).map(([id, record]) => ({
-        id,
-        name: catalog.current().find(info => info.id === id)?.name ?? id,
-        validation: record.validation,
-        efforts: record.efforts,
-        probedAt: record.probedAtMs,
-      })),
+      candidates: models.filter(isProbeCandidate).map(info => info.id),
+      // Newest first: a detection the user just ran belongs at the top, not
+      // appended below every earlier one.
+      results: newestFirst(results),
     }
   }
 
