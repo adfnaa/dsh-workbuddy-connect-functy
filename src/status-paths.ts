@@ -3,6 +3,48 @@
 /** Plugin-owned status endpoint consumed by its browser half. */
 export const WORKBUDDY_STATUS_PATH = '/plugins/dsh-workbuddy-connect/status'
 
+/**
+ * Plugin-owned probe control endpoint.
+ *
+ * Separate from the status route because it accepts writes: the status route's
+ * loopback Host/Origin guard protects against a DNS-rebinding *page*, which is
+ * not the same as authorizing a state-changing action. This route therefore
+ * also requires the in-process key the browser half receives with the status
+ * document.
+ */
+export const WORKBUDDY_PROBE_PATH = '/plugins/dsh-workbuddy-connect/probe'
+
+/** One model's recorded probe observation, as the card displays it. */
+export interface WorkBuddyWebProbeModel {
+  id: string
+  name: string
+  /** `validating` results carry efforts; the other states never do. */
+  validation: 'validating' | 'non-validating' | 'unknown'
+  efforts: readonly string[]
+  probedAt: number
+}
+
+/** Probe section of the status document. */
+export interface WorkBuddyWebProbeSection {
+  /** Whether the user has authorized probing. */
+  consent: boolean
+  /** Whether new/changed models are probed automatically. */
+  auto: boolean
+  /** Whether a sweep is in flight right now. */
+  running: boolean
+  /** Models the user could probe by hand (undeclared yet reasoning-capable). */
+  candidates: readonly string[]
+  /** Recorded observations. */
+  results: readonly WorkBuddyWebProbeModel[]
+}
+
+/** Action requested from the probe control route. */
+export interface WorkBuddyProbeAction {
+  action: 'probe' | 'clear'
+  /** Target model id; required for `probe`. */
+  model?: string
+}
+
 /** One billing package and its remaining credit. */
 export interface WorkBuddyWebCreditAccount {
   packageName: string
@@ -30,6 +72,16 @@ export interface WorkBuddyWebModelBadge {
    * may be interpolated into a localized sentence rather than shown bare.
    */
   credits?: string
+  /**
+   * Context capacity in tokens, taken verbatim from the upstream
+   * `maxAllowedSize`/`maxInputTokens`.
+   *
+   * Reported, never chosen: the upstream describes one capacity per model and
+   * publishes no tiers, so the plugin displays what it was told rather than
+   * offering a menu of its own. (The desktop app's "300K / 1M" picker is
+   * client-side policy that appears nowhere in the catalog.)
+   */
+  contextWindow?: number
 }
 
 /** The JSON document the plugin card renders. */
@@ -45,5 +97,13 @@ export type WorkBuddyWebStatus =
     creditsError?: string
     /** Billing convenience facts for the models the plugin serves. */
     models?: readonly WorkBuddyWebModelBadge[]
+    /** Reasoning-effort probe state, consent, and recorded observations. */
+    probe?: WorkBuddyWebProbeSection
+    /**
+     * In-process key authorizing probe control writes. Handed to the card with
+     * the status document (the card is same-origin and already had to pass the
+     * loopback guard); it is never persisted and rotates per process.
+     */
+    probeKey?: string
   }
   | { status: 'error'; message: string }
