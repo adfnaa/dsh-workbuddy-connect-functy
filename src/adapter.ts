@@ -194,6 +194,13 @@ function toPiModel(info: WorkBuddyModelInfo, baseUrl: string): Model<Api> {
  * Assemble the adapter. The provider's `getModels` reads the live catalog,
  * and every model's `baseUrl` is re-resolved per read so the shim's
  * ephemeral port applies from the first snapshot after startup.
+ *
+ * The profile is constructed by hand rather than through dsh-llm-pi-ai's
+ * internal `resolveProfiles()`: that helper is not part of the package's
+ * public export surface (root entry, `lib/` deep imports blocked by the
+ * exports map, `src/` not shipped), so hand-assembly is the only supported
+ * path and every newly required field must be adopted here explicitly —
+ * `modelErrors` since 0.1.5-alpha.2 (#12).
  */
 export function createWorkBuddyAdapter(options: WorkBuddyAdapterOptions): WorkBuddyAdapter {
   const { shim, store, catalog, resolveAttachments } = options
@@ -234,6 +241,9 @@ export function createWorkBuddyAdapter(options: WorkBuddyAdapterOptions): WorkBu
     streamIdleTimeoutMs: WORKBUDDY_STREAM_IDLE_TIMEOUT_MS,
     retryPolicy: resolveRetryPolicy(undefined, 'dsh-workbuddy-connect retryPolicy'),
     configuredMaxTokens: new Map(),
+    // Required since 0.1.5-alpha.2; the live catalog only exposes models that
+    // probed successfully, so there is never a per-model failure to report.
+    modelErrors: new Map(),
     ...REQUEST_IMAGE_BUDGETS,
     piProvider: provider,
   }
