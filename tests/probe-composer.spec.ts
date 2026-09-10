@@ -22,6 +22,10 @@ describe('Composer model probe', () => {
   let statusBody: Record<string, unknown>
   const listeners = new Set<() => void>()
   const request = vi.fn()
+  /** Backing map for the stubbed localStorage. */
+  let seenStore = new Map<string, string>()
+  /** Captured `focus` listeners, so a reconcile can be fired on demand. */
+  let focusHandlers: (() => void)[] = []
   const directory = {
     getSnapshot: () => state,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener) },
@@ -45,18 +49,44 @@ describe('Composer model probe', () => {
     }
   }
 
+  /** Display name the stubbed status document would report for a model id. */
+  function nameFor(model: string): string {
+    return model === 'auto' ? 'Auto' : 'GLM-5.2'
+  }
+
   beforeEach(() => {
     probeStatus()
     select('workbuddy', 'glm-5.2')
-    request.mockReset().mockImplementation(async (_url: string, init?: RequestInit) => ({
-      ok: true,
-      json: async () => init?.method === 'POST'
-        ? { state: 'ok', validation: 'non-validating', efforts: [] }
-        : statusBody,
-    }))
+    request.mockReset().mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method !== 'POST') return { ok: true, json: async () => statusBody }
+      // A successful probe writes a result that the next status read reports,
+      // the way the host does. Without that the control would refresh and see
+      // the same candidate list, and there would be no outcome to announce.
+      const probed = JSON.parse(String(init.body)) as { model: string }
+      const probe = statusBody['probe'] as Record<string, unknown>
+      const name = nameFor(probed.model)
+      probe['candidates'] = (probe['candidates'] as string[]).filter(id => id !== probed.model)
+      probe['results'] = [
+        { id: probed.model, name, validation: 'non-validating', efforts: [], probedAt: Date.now() },
+        ...(probe['results'] as unknown[]),
+      ]
+      return { ok: true, json: async () => ({ state: 'ok', validation: 'non-validating', efforts: [] }) }
+    })
     vi.stubGlobal('fetch', request)
+    // Minimal in-memory localStorage: the "already read" marks are persisted
+    // there precisely so a reload cannot replay an old detection as news.
+    seenStore = new Map()
+    focusHandlers = []
     vi.stubGlobal('window', {
-      setInterval: () => 1, clearInterval: () => {}, addEventListener: () => {}, removeEventListener: () => {},
+      setInterval: () => 1,
+      clearInterval: () => {},
+      addEventListener: (name: string, handler: () => void) => { if (name === 'focus') focusHandlers.push(handler) },
+      removeEventListener: () => {},
+      localStorage: {
+        getItem: (key: string) => seenStore.get(key) ?? null,
+        setItem: (key: string, value: string) => { seenStore.set(key, value) },
+        removeItem: (key: string) => { seenStore.delete(key) },
+      },
     })
   })
   afterEach(() => {
@@ -113,35 +143,34 @@ describe('Composer model probe', () => {
     expect(button()[0]!.props['aria-describedby']).toBeTruthy()
   })
 
-  it('suppresses the tooltip while the result note is open', async () => {
-    // The note and the tooltip anchor to the same spot, so showing both would
-    // overlap them. The note already states the outcome the tooltip would, so
-    // it wins; hovering must not stack a second bubble on top of it.
+  it('does not announce a result that predates this page', async () => {
+    // The note is for "you just ran a detection, here is the outcome". A stored
+    // result the user never saw announced here is recorded as read silently, so
+    // neither a reload nor a model switch replays it as news.
     probeStatus({
       candidates: [],
       results: [{ id: 'glm-5.2', name: 'GLM-5.2', validation: 'validating', efforts: ['low', 'high'], probedAt: Date.now() }],
     })
     await mount()
-    const wrapper = view!.root.findAllByType('span')[0]!
-    await act(async () => { wrapper.props.onMouseEnter() })
-    expect(tooltips()).toHaveLength(0)
-    // The outcome is still on screen — in the note, not silently dropped.
-    expect(JSON.stringify(view!.toJSON())).toContain('low / high')
-    expect(buttonLabels()).toContain(en.probeNoteDismiss)
-  })
-
-  it('shows the tooltip again once the note is dismissed', async () => {
-    probeStatus({
-      candidates: [],
-      results: [{ id: 'glm-5.2', name: 'GLM-5.2', validation: 'validating', efforts: ['low', 'high'], probedAt: Date.now() }],
-    })
-    await mount()
-    const dismiss = button().find(node => node.children.join('') === en.probeNoteDismiss)!
-    await act(async () => { dismiss.props.onClick() })
+    expect(buttonLabels()).not.toContain(en.probeNoteDismiss)
+    // The result is still discoverable: the tooltip reports it on hover.
     const wrapper = view!.root.findAllByType('span')[0]!
     await act(async () => { wrapper.props.onMouseEnter() })
     expect(tooltips()).toHaveLength(1)
     expect(tooltips()[0]!.children.join('')).toContain('low / high')
+  })
+
+  it('does not re-announce after switching models away and back', async () => {
+    probeStatus({
+      candidates: ['glm-5.2', 'auto'],
+      results: [{ id: 'glm-5.2', name: 'GLM-5.2', validation: 'validating', efforts: ['low'], probedAt: Date.now() }],
+    })
+    await mount()
+    expect(buttonLabels()).not.toContain(en.probeNoteDismiss)
+    await act(async () => { select('workbuddy', 'auto') })
+    await act(async () => { select('workbuddy', 'glm-5.2') })
+    // Switching is not a reason to repeat something already on record.
+    expect(buttonLabels()).not.toContain(en.probeNoteDismiss)
   })
 
   it('opens an in-page confirmation instead of window.confirm', async () => {
@@ -187,41 +216,69 @@ describe('Composer model probe', () => {
     await act(async () => { button()[0]!.props.onClick() })
     const detect = button().find(node => node.children.join('') === en.probeConfirmAction)!
     await act(async () => { detect.props.onClick() })
-    // The POST resolves `ok`; the bubble must not linger over the composer.
-    expect(button()).toHaveLength(1)
+    // The confirmation is gone — replaced by the outcome note, which is a
+    // different bubble. Only Cancel/Detect disappear.
+    expect(buttonLabels()).not.toContain(en.probeConfirmAction)
+    expect(buttonLabels()).not.toContain(en.cancel)
   })
 
-  it('announces a recorded result as a small dismissable note', async () => {
-    probeStatus({
-      candidates: [],
-      results: [{ id: 'glm-5.2', name: 'GLM-5.2', validation: 'validating', efforts: ['low', 'high'], probedAt: Date.now() }],
-    })
+  it('announces the outcome of a detection this control started', async () => {
+    // The self-initiated path still announces: the user just spent a request
+    // and needs to know what came back.
     await mount()
-    // The note shows the verified levels and a "got it" button.
-    const noteText = view!.toJSON()
-    expect(JSON.stringify(noteText)).toContain('low / high')
+    await act(async () => { button()[0]!.props.onClick() })
+    const detect = button().find(node => node.children.join('') === en.probeConfirmAction)!
+    await act(async () => { detect.props.onClick() })
+    // The POST answer is reported by the note.
     expect(buttonLabels()).toContain(en.probeNoteDismiss)
   })
 
   it('reports a non-validating outcome instead of verified levels', async () => {
-    probeStatus({
-      candidates: [],
-      results: [{ id: 'glm-5.2', name: 'GLM-5.2', validation: 'non-validating', efforts: [], probedAt: Date.now() }],
-    })
+    // The stubbed POST answers `non-validating`.
     await mount()
+    await act(async () => { button()[0]!.props.onClick() })
+    const detect = button().find(node => node.children.join('') === en.probeConfirmAction)!
+    await act(async () => { detect.props.onClick() })
     expect(JSON.stringify(view!.toJSON())).toContain(en.probeNoteNotValidating)
   })
 
-  it('hides the note and remembers the dismissal for the same probedAt', async () => {
+  it('still announces when a poll delivers a result mid-flight', async () => {
+    // The 60s reconcile poll can land while the user's own probe is running.
+    // That used to consume the "I started this" flag, so the real outcome was
+    // filed as read and no note appeared.
+    await mount()
+    await act(async () => { button()[0]!.props.onClick() })
+    const detect = button().find(node => node.children.join('') === en.probeConfirmAction)!
+
+    // A poll lands mid-flight reporting another model's result — the
+    // interference that used to consume the "I started this" flag.
+    statusBody['probe'] = {
+      ...(statusBody['probe'] as Record<string, unknown>),
+      results: [{ id: 'auto', name: 'Auto', validation: 'validating', efforts: ['low'], probedAt: Date.now() }],
+    }
+    await act(async () => { detect.props.onClick() })
+
+    // The user's own detection is still announced.
+    expect(buttonLabels()).toContain(en.probeNoteDismiss)
+  })
+
+  it('persists the dismissal so it survives a remount', async () => {
+    await mount()
+    await act(async () => { button()[0]!.props.onClick() })
+    const detect = button().find(node => node.children.join('') === en.probeConfirmAction)!
+    await act(async () => { detect.props.onClick() })
+    const dismiss = button().find(node => node.children.join('') === en.probeNoteDismiss)!
+    await act(async () => { dismiss.props.onClick() })
+    expect(buttonLabels()).not.toContain(en.probeNoteDismiss)
+
+    // A fresh mount stands in for a reload or restart: the mark is on disk, so
+    // the same outcome must not be announced again.
     const probedAt = Date.now()
     probeStatus({
       candidates: [],
-      results: [{ id: 'glm-5.2', name: 'GLM-5.2', validation: 'validating', efforts: ['low'], probedAt }],
+      results: [{ id: 'glm-5.2', name: 'GLM-5.2', validation: 'non-validating', efforts: [], probedAt }],
     })
     await mount()
-    const dismiss = button().find(node => node.children.join('') === en.probeNoteDismiss)!
-    await act(async () => { dismiss.props.onClick() })
-    // The note is gone and the bubble state has no button labelled "got it".
-    expect(button().map(node => node.children.join(''))).not.toContain(en.probeNoteDismiss)
+    expect(buttonLabels()).not.toContain(en.probeNoteDismiss)
   })
 })
