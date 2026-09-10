@@ -15,7 +15,7 @@ import { normalizeCredits } from './upstream.ts'
 import type { WorkBuddyModelInfo } from './catalog.ts'
 import { hostIsLoopback, originIsLoopback } from './loopback.ts'
 import { WORKBUDDY_STATUS_PATH } from './status-paths.ts'
-import type { WorkBuddyWebModelBadge, WorkBuddyWebStatus } from './status-paths.ts'
+import type { WorkBuddyWebModelBadge, WorkBuddyWebProbeSection, WorkBuddyWebStatus } from './status-paths.ts'
 
 export { WORKBUDDY_STATUS_PATH } from './status-paths.ts'
 export type { WorkBuddyWebStatus } from './status-paths.ts'
@@ -26,6 +26,13 @@ export interface WorkBuddyStatusRouteOptions {
   client: Pick<WorkBuddyUpstreamClient, 'fetchCredits'>
   /** Resolve the current model catalog for free/badge display. */
   models: () => readonly WorkBuddyModelInfo[]
+  /**
+   * Compact probe state for the card. Optional so the status route keeps
+   * working on its own in tests and headless profiles.
+   */
+  probe?: () => WorkBuddyWebProbeSection
+  /** In-process key authorizing probe control writes. */
+  probeKey?: string
 }
 
 /** Redact token-like content before it crosses to the browser. */
@@ -69,13 +76,18 @@ export async function workBuddyWebStatus(
     ...authStatus.source === undefined ? {} : { source: authStatus.source },
     ...authStatus.expiresAtMs === undefined ? {} : { expiresAt: authStatus.expiresAtMs },
   }
-  // Model billing facts ride the signed-in document so the card can show which
-  // models are free or on a promo, without touching the Models picker. The
-  // rate is normalized here (not in the card) so both halves agree on one
-  // display form; the card additionally localizes it.
+  // Model facts ride the signed-in document so the card can show rates,
+  // promos, and context capacity without touching the Models picker. The rate
+  // is normalized here (not in the card) so both halves agree on one display
+  // form; the card additionally localizes it.
+  //
+  // The card receives *every* model, not just the discounted ones: context
+  // capacity is exactly the fact a user wants before picking a model, and the
+  // models where it matters most (a 200k model beside 1M siblings) are
+  // precisely the ones with no promo attached. The discount section filters
+  // what it renders.
   const models = deps.models()
   const modelsField: readonly WorkBuddyWebModelBadge[] = models
-    .filter(model => model.billing?.free === true || (model.billing?.badges?.length ?? 0) > 0)
     .map(model => {
       const rate = normalizeCredits(model.billing?.credits)
       return {
@@ -84,21 +96,36 @@ export async function workBuddyWebStatus(
         ...model.billing?.free === true ? { free: true as const } : {},
         ...model.billing?.badges !== undefined && model.billing.badges.length > 0 ? { badges: model.billing.badges } : {},
         ...rate === undefined ? {} : { credits: rate },
+        // Verbatim from the upstream catalog; omitted when it said nothing.
+        ...typeof model.contextWindow === 'number' && model.contextWindow > 0
+          ? { contextWindow: model.contextWindow }
+          : {},
       }
     })
   const statusWithModels: WorkBuddyWebStatus = modelsField.length > 0
     ? { ...status, models: modelsField }
     : status
+  // Probe state rides the signed-in document so the card can render the
+  // consent switches and results without a second request. The control key
+  // travels with it: this response already passed the loopback guard, and the
+  // key authorizes only probe control, never credentials or completions.
+  const probed: WorkBuddyWebStatus = deps.probe === undefined
+    ? statusWithModels
+    : {
+      ...statusWithModels,
+      probe: deps.probe(),
+      ...deps.probeKey === undefined ? {} : { probeKey: deps.probeKey },
+    }
   try {
     const credential = await deps.store.current()
     if (credential !== undefined) {
       const credits = await deps.client.fetchCredits(credential)
-      return { ...statusWithModels, credits }
+      return { ...probed, credits }
     }
   } catch (error: unknown) {
-    return { ...statusWithModels, creditsError: safeMessage(error) }
+    return { ...probed, creditsError: safeMessage(error) }
   }
-  return statusWithModels
+  return probed
 }
 
 /** The status route's request handler, extracted so tests can mount it on a bare server. */

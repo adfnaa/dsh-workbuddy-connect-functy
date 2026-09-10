@@ -4,8 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
-import { WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
-import type { WorkBuddyWebModelBadge, WorkBuddyWebStatus } from '../status-paths.ts'
+import { WORKBUDDY_PROBE_PATH, WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
+import type { WorkBuddyWebModelBadge, WorkBuddyWebProbeSection, WorkBuddyWebStatus } from '../status-paths.ts'
 import type { WorkBuddySettingsKey } from './locales.ts'
 
 /** Localized copy injected by the browser-plugin registration. */
@@ -72,6 +72,56 @@ function modelBadgeLabel(badge: string, t: WorkBuddyPluginCardInjected['t']): st
   return badge
 }
 const progressTrackStyle: CSSProperties = { height: 8, overflow: 'hidden', borderRadius: 999, background: 'var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.08))' }
+
+/**
+ * Inline confirmation box for a paid detection. Replaces the previous
+ * `window.confirm`: the decision is one line plus two buttons, and a modal
+ * alert for that is heavier than the action it guards.
+ */
+const confirmBoxStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 10,
+  padding: '10px 12px',
+  border: '1px solid var(--dsw-alias-border-l2)',
+  borderRadius: 8,
+  background: 'var(--dsw-alias-bg-layer-1)',
+}
+const confirmRowStyle: CSSProperties = { display: 'flex', justifyContent: 'flex-end', gap: 8 }
+
+/** Hover breakdown of the models that are not at the common capacity. */
+const contextTipStyle: CSSProperties = {
+  position: 'absolute',
+  right: 0,
+  top: 'calc(100% + 6px)',
+  zIndex: 20,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  minWidth: 200,
+  padding: '8px 10px',
+  border: '1px solid var(--dsw-alias-border-l2)',
+  borderRadius: 8,
+  background: 'var(--dsw-alias-bg-layer-1)',
+  boxShadow: 'var(--dsw-shadow-lv2)',
+  color: 'var(--dsw-alias-label-primary)',
+  fontSize: 12,
+  lineHeight: '18px',
+  cursor: 'default',
+}
+const contextTipRowStyle: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 16 }
+
+/**
+ * Primary action of the inline confirmation. Fill and text colour come from the
+ * theme as a pair: `brand-primary` is a light accent here, so pairing it with a
+ * hardcoded white would render white-on-white.
+ */
+const primaryButtonStyle: CSSProperties = {
+  ...buttonStyle,
+  border: '1px solid var(--dsw-alias-button-primary-fill)',
+  background: 'var(--dsw-alias-button-primary-fill)',
+  color: 'var(--dsw-alias-label-primary-foreground)',
+}
 
 function progressFillStyle(percent: number): CSSProperties {
   return {
@@ -157,6 +207,186 @@ function ModelOfferRow({ model, t }: {
   )
 }
 
+/**
+ * Context capacity, summarized.
+ *
+ * A per-model list would be mostly noise: seven of fifteen models sit at the
+ * same 1M, so a fifteen-row block spends its height repeating one number. What
+ * actually matters is *which models are not 1M*, because that is what silently
+ * ends a long conversation (a 200k model looks identical in the picker to its
+ * 1M siblings).
+ *
+ * So: one line stating the common case, with the full breakdown on hover —
+ * the same disclosure pattern the Composer's probe entry uses. Purely a report
+ * of the upstream's own number; the plugin offers no tier picker, because the
+ * catalog declares one capacity per model and publishes no alternatives.
+ */
+function ContextSummary({ models, t }: {
+  models: readonly WorkBuddyWebModelBadge[] | undefined
+  t: WorkBuddyPluginCardInjected['t']
+}): React.ReactNode {
+  const [open, setOpen] = useState(false)
+  const known = (models ?? []).filter(model => model.contextWindow !== undefined)
+  if (known.length === 0) return null
+
+  // The most common capacity is the "normal" case; everything else is the
+  // exception worth naming.
+  const counts = new Map<number, number>()
+  for (const model of known) counts.set(model.contextWindow as number, (counts.get(model.contextWindow as number) ?? 0) + 1)
+  const [common] = [...counts.entries()].sort((a, b) => b[1] - a[1] || b[0] - a[0])[0] as [number, number]
+  const exceptions = known.filter(model => model.contextWindow !== common)
+  const commonCount = counts.get(common) ?? 0
+  const summary = exceptions.length === 0
+    ? t('contextAllSame', { tokens: formatTokens(common) })
+    : t('contextMixed', { tokens: formatTokens(common), count: commonCount, total: known.length })
+
+  return (
+    <div style={quotaListStyle}>
+      <h3 style={quotaTitleStyle}>{t('contextHeading')}</h3>
+      <span
+        style={{ ...quotaLabelStyle, position: 'relative', cursor: 'help' }}
+        onMouseEnter={() => { setOpen(true) }}
+        onMouseLeave={() => { setOpen(false) }}
+      >
+        <span>{summary}</span>
+        <span style={{ ...modelRateStyle, display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+          {t('contextHoverHint')}
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="2" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 16v-5M12 8h.01" />
+          </svg>
+        </span>
+        {open ? (
+          <span role="tooltip" style={contextTipStyle}>
+            <span style={{ fontWeight: 600 }}>{t('contextTipHeading')}</span>
+            {exceptions.map(model => (
+              <span key={model.id} style={contextTipRowStyle}>
+                <span>{model.name}</span>
+                <span>{formatTokens(model.contextWindow as number)}</span>
+              </span>
+            ))}
+          </span>
+        ) : null}
+      </span>
+    </div>
+  )
+}
+
+/**
+ * Compact token count for display: the catalog's own round numbers (`200000`,
+ * `1000000`) read better as `200K` / `1M`, and no precision is lost because
+ * these values are always whole thousands.
+ */
+function formatTokens(tokens: number): string {
+  if (tokens >= 1_000_000 && tokens % 1_000_000 === 0) return `${tokens / 1_000_000}M`
+  if (tokens >= 1_000 && tokens % 1_000 === 0) return `${tokens / 1_000}K`
+  return String(tokens)
+}
+
+/**
+ * Reasoning-effort detection section: consent switches, per-model detection,
+ * and the recorded observations.
+ *
+ * Two deliberate UX rules from the plan (§3.1, §3.2):
+ * - the confirmation is shown *before* any request, and its copy states the
+ *   request count and the credit caveat rather than the auto-detect switch
+ *   silently enrolling the user;
+ * - a `non-validating` result is presented as an observation about the
+ *   parameter ("this model does not check it"), never as a statement that a
+ *   level is unsupported.
+ */
+function ProbeSection({ probe, t, onDetect, onClear, busy }: {
+  probe: WorkBuddyWebProbeSection
+  t: WorkBuddyPluginCardInjected['t']
+  onDetect: (modelId: string) => void
+  onClear: () => void
+  busy: boolean
+}): React.ReactNode {
+  // Which model is awaiting confirmation. Confirmation is inline for the same
+  // reason the Composer entry uses a bubble: a modal alert for a one-line
+  // decision is heavier than the action it guards.
+  const [pending, setPending] = useState<string>()
+  // A sweep that finishes (or a catalogue change that removes the candidate)
+  // must not leave a stale confirmation behind.
+  useEffect(() => {
+    if (pending !== undefined && !probe.candidates.includes(pending)) setPending(undefined)
+  }, [pending, probe.candidates])
+  return (
+    <div style={quotaListStyle}>
+      <h3 style={quotaTitleStyle}>{t('probeHeading')}</h3>
+      <p style={bodyStyle}>{t('probeIntro')}</p>
+      <p style={bodyStyle}>{t('probeConsentHint')}</p>
+      {probe.auto ? <p style={bodyStyle}>{t('probeAutoHint')}</p> : null}
+      {probe.running ? <p style={bodyStyle}>{t('probeRunningGeneric')}</p> : null}
+
+      {probe.results.length === 0 ? null : (
+        <div style={quotaGroupStyle}>
+          {probe.results.map(result => (
+            <div key={result.id} style={modelOfferStyle}>
+              <div style={quotaLabelStyle}>
+                <span>{result.name}</span>
+                <span style={modelBadgeStyle}>
+                  {result.validation === 'validating' && result.efforts.length > 0
+                    ? <span style={modelBadgeChipStyle}>{result.efforts.join(' / ')}</span>
+                    : <span style={modelBadgeChipStyle}>{t(result.validation === 'non-validating' ? 'probeResultNotValidating' : 'probeResultUnknown')}</span>}
+                </span>
+              </div>
+              <span style={modelRateStyle}>{t('probeResultAt', { time: formatTime(result.probedAt) })}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {probe.candidates.length === 0
+        ? <p style={bodyStyle}>{t('probeResultEmpty')}</p>
+        : (
+          <div style={quotaGroupStyle}>
+            <p style={bodyStyle}>{t('probeCandidates', { count: probe.candidates.length })}</p>
+            <div style={modelBadgeStyle}>
+              {probe.candidates.map(id => (
+                <button
+                  key={id}
+                  type="button"
+                  style={buttonStyle}
+                  disabled={probe.running || busy}
+                  onClick={() => { setPending(id) }}
+                >
+                  {busy ? t('probeRunning', { model: id }) : `${t('probeStart')}: ${id}`}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+      {pending === undefined ? null : (
+        <div style={confirmBoxStyle}>
+          <p style={bodyStyle}>{t('probeConfirmBody', { model: pending })}</p>
+          <div style={confirmRowStyle}>
+            <button type="button" style={buttonStyle} onClick={() => { setPending(undefined) }}>
+              {t('cancel')}
+            </button>
+            <button
+              type="button"
+              style={primaryButtonStyle}
+              disabled={probe.running || busy}
+              onClick={() => { setPending(undefined); onDetect(pending) }}
+            >
+              {t('probeConfirmAction')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {probe.results.length === 0 ? null : (
+        <button type="button" style={buttonStyle} disabled={busy} onClick={() => { onClear() }}>
+          {t('probeClear')}
+        </button>
+      )}
+    </div>
+  )
+}
+
 /** Render WorkBuddy sign-in state and credit as one expandable card. */
 export function WorkBuddyPluginCard({ t }: WorkBuddyPluginCardProps) {
   if (t === undefined) throw new Error('WorkBuddy plugin card requires its translation function')
@@ -212,6 +442,49 @@ export function WorkBuddyPluginCard({ t }: WorkBuddyPluginCardProps) {
       if (mounted.current) setBusy(false)
     }
   }
+
+  /**
+   * Run one control action and refresh the card's state afterwards.
+   *
+   * The key travels in a header, not the body: it authorizes the write, and
+   * the host never accepts a prompt, a sentinel, or a model outside its own
+   * catalog from here.
+   */
+  const control = useCallback(async (action: { action: 'probe'; model: string } | { action: 'clear' }): Promise<void> => {
+    const key = status.status === 'signed-in' ? status.probeKey : undefined
+    if (key === undefined) return
+    setBusy(true)
+    try {
+      const response = await fetch(WORKBUDDY_PROBE_PATH, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Probe-Key': key },
+        credentials: 'same-origin',
+        body: JSON.stringify(action),
+      })
+      const value: unknown = await response.json().catch(() => undefined)
+      if (!response.ok) {
+        const message = typeof value === 'object' && value !== null && 'error' in value
+          ? String((value as Record<string, unknown>)['error'])
+          : `HTTP ${response.status}`
+        throw new Error(message)
+      }
+      await refresh()
+    } catch (error: unknown) {
+      if (mounted.current) {
+        setStatus(previous => ({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') }))
+      }
+    } finally {
+      if (mounted.current) setBusy(false)
+    }
+  }, [refresh, status, t])
+
+  /**
+   * Start a detection. Confirmation happens inline in the section, so this is
+   * only ever called after the user has already agreed.
+   */
+  const confirmDetect = useCallback((modelId: string): void => {
+    void control({ action: 'probe', model: modelId })
+  }, [control])
 
   const title = t('title')
   const label = status.status === 'signed-in'
@@ -275,8 +548,20 @@ export function WorkBuddyPluginCard({ t }: WorkBuddyPluginCardProps) {
                   {status.models === undefined || status.models.length === 0 ? null : (
                     <div style={quotaListStyle}>
                       <h3 style={quotaTitleStyle}>{t('modelsHeading')}</h3>
-                      {status.models.map(model => <ModelOfferRow key={model.id} model={model} t={t} />)}
+                      {status.models
+                        .filter(model => model.free === true || (model.badges?.length ?? 0) > 0)
+                        .map(model => <ModelOfferRow key={model.id} model={model} t={t} />)}
                     </div>
+                  )}
+                  <ContextSummary models={status.models} t={t} />
+                  {status.probe === undefined ? null : (
+                    <ProbeSection
+                      probe={status.probe}
+                      t={t}
+                      busy={busy}
+                      onDetect={confirmDetect}
+                      onClear={() => { void control({ action: 'clear' }) }}
+                    />
                   )}
                 </>
               : null}

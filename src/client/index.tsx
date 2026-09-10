@@ -5,6 +5,9 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {} from '@deepseek-ai/dsh-client-ui-model-selection/client'
+import { WorkBuddyProbeControl } from './WorkBuddyProbeControl.tsx'
 import { WorkBuddyPluginCard } from './WorkBuddyPluginCard.tsx'
 import type { WorkBuddyPluginCardInjected } from './WorkBuddyPluginCard.tsx'
 import { en, zh } from './locales.ts'
@@ -62,6 +65,19 @@ export function apply(ctx: ClientContext): void {
       priority: 30,
       inject: (): WorkBuddyPluginCardInjected => ({ t }),
     }, WorkBuddyPluginCard))
+    ctx.inject(['modelDirectories'], scope => {
+      scope.slots.inject('conversation.input.right', () => scope.slots.register({
+        name: 'conversation.input.right',
+        id: 'workbuddy-probe',
+        order: 10,
+        inject: sessionId => ({
+          directory: scope.modelDirectories.directoryFor(
+            sessionId as Parameters<typeof scope.modelDirectories.directoryFor>[0],
+          ).store,
+          t,
+        }),
+      }, WorkBuddyProbeControl))
+    })
   } catch (error: unknown) {
     // Degrade silently on the page: the host provider still serves models.
     // Developers see the full cause in the browser console; users see no banner.

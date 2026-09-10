@@ -8,6 +8,8 @@
  */
 
 import type { WorkBuddyCredential } from './auth.ts'
+import type { ProbeAttempt } from './probe.ts'
+import { PROBE_MAX_TOKENS, PROBE_PROMPT } from './probe.ts'
 
 /** WorkBuddy region selected by the credential's login domain. */
 export type WorkBuddyRegion = 'cn' | 'global'
@@ -478,8 +480,7 @@ export class WorkBuddyUpstreamClient {
   }
 
   /** GET the personal model catalog and keep the `cli` agent's models only. */
-  async fetchModels(credential: WorkBuddyCredential): Promise<readonly WorkBuddyUpstreamModel[]> {
-    const response = await fetch(`${chatBase(credential)}/console/enterprises/personal/models`, {
+  async fetchModels(credential: WorkBuddyCredential): Promise<readonly WorkBuddyUpstreamModel[]> {    const response = await fetch(`${chatBase(credential)}/console/enterprises/personal/models`, {
       headers: {
         'Authorization': `Bearer ${credential.accessToken}`,
         'Accept': 'application/json',
@@ -595,5 +596,99 @@ export class WorkBuddyUpstreamClient {
       })
     }
     return { total, accounts }
+  }
+
+  /**
+   * One probe request: a real streaming chat call carrying the effort under
+   * test.
+   *
+   * Shares `chatHeaders` with the normal chat path on purpose — the plan
+   * forbids probing through anything but the plugin's own credential handling,
+   * so a result describes what a real message would experience.
+   *
+   * The caller aborts as soon as a parseable event arrives; the body is never
+   * assembled into an answer. `reasoning_effort` is omitted entirely (rather
+   * than sent empty) when `effort` is undefined, so the baseline case is a
+   * genuinely bare request.
+   */
+  async probeEffort(
+    credential: WorkBuddyCredential,
+    model: string,
+    effort: string | undefined,
+    signal: AbortSignal,
+  ): Promise<ProbeAttempt> {
+    const payload: Record<string, unknown> = {
+      model,
+      stream: true,
+      messages: [{ role: 'user', content: PROBE_PROMPT }],
+      max_tokens: PROBE_MAX_TOKENS,
+    }
+    if (effort !== undefined) payload['reasoning_effort'] = effort
+
+    let response: Response
+    try {
+      response = await fetch(`${chatBase(credential)}/v2/chat/completions`, {
+        method: 'POST',
+        headers: { ...chatHeaders(credential), 'Authorization': `Bearer ${credential.accessToken}` },
+        body: JSON.stringify(payload),
+        signal,
+      })
+    } catch (error: unknown) {
+      return { status: 0, streamed: false, detail: `transport error: ${String(error)}` }
+    }
+
+    if (!response.ok) {
+      const text = (await response.text()).slice(0, ERROR_BODY_LIMIT)
+      return { status: response.status, streamed: false, ...errorCodeOf(text) }
+    }
+
+    // Read until the first parseable event, then hang up: the probe wants the
+    // acceptance signal, not a completion.
+    const streamed = await readFirstEvent(response)
+    return { status: response.status, streamed }
+  }
+}
+
+/** Pull `extError.code` out of an upstream error body, if it is shaped that way. */
+function errorCodeOf(text: string): { errorCode?: string; detail?: string } {
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      const wrapped = parsed as Record<string, unknown>
+      const extError = wrapped['extError']
+      if (typeof extError === 'object' && extError !== null && !Array.isArray(extError)) {
+        const code = (extError as Record<string, unknown>)['code']
+        if (typeof code === 'string') return { errorCode: code, detail: code }
+      }
+    }
+  } catch {
+    // Not JSON: fall through to a plain detail line.
+  }
+  return { detail: text.slice(0, 200) }
+}
+
+/**
+ * Consume just enough of a streaming response to know it really streams.
+ *
+ * Returns true on the first chunk containing a data line. Cancels the body
+ * afterwards; a stream that ends or errors before that counts as not streamed,
+ * because an empty 200 is not evidence the effort was accepted.
+ */
+async function readFirstEvent(response: Response): Promise<boolean> {
+  const body = response.body
+  if (body === null) return false
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) return false
+      const text = decoder.decode(value, { stream: true })
+      if (text.includes('data:')) return true
+    }
+  } catch {
+    return false
+  } finally {
+    await reader.cancel().catch(() => {})
   }
 }

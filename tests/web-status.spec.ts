@@ -7,6 +7,7 @@ import { WorkBuddyCredentialStore } from '../src/auth.ts'
 import { workBuddyStatusHandler } from '../src/web-status.ts'
 import { WORKBUDDY_STATUS_PATH } from '../src/status-paths.ts'
 import type { WorkBuddyStatusRouteOptions } from '../src/web-status.ts'
+import type { WorkBuddyUpstreamModel } from '../src/upstream.ts'
 
 const CLEANUP: (() => Promise<void>)[] = []
 
@@ -47,7 +48,7 @@ function requestOnce(options: {
   })
 }
 
-async function startStatusServer(): Promise<number> {
+async function startStatusServer(overrides: Partial<WorkBuddyStatusRouteOptions> = {}): Promise<number> {
   const dir = await mkdtemp(join(tmpdir(), 'wb-status-'))
   CLEANUP.push(() => rm(dir, { recursive: true, force: true }))
   const desktop = join(dir, 'workbuddy-desktop.info')
@@ -60,6 +61,7 @@ async function startStatusServer(): Promise<number> {
     }),
     client: { fetchCredits: async () => ({ total: 0, accounts: [] }) },
     models: () => [],
+    ...overrides,
   }
   const server = createServer(workBuddyStatusHandler(deps))
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -67,6 +69,61 @@ async function startStatusServer(): Promise<number> {
   CLEANUP.push(() => new Promise<void>(resolve => server.close(() => resolve())))
   return port
 }
+
+describe('context capacity reporting', () => {
+  /**
+   * The card needs every model's capacity, not only the promoted ones: the
+   * models where capacity matters (a 200k model beside 1M siblings) carry no
+   * promo, so a payload filtered down to discounts would hide exactly the fact
+   * worth showing. The discount list filters at render time instead.
+   */
+  it('reports capacity for un-promoted models, verbatim and unfiltered', async () => {
+    const port = await startStatusServer({
+      models: (): readonly WorkBuddyUpstreamModel[] => [
+        {
+          id: 'glm-5.1', name: 'GLM-5.1', contextWindow: 200_000, maxTokens: 48_000, supportsImages: false,
+          reasoning: { supports: true, onlyReasoning: true, canDisableThinking: false },
+          billing: { credits: 'x0.79 credits', free: false },
+        },
+        {
+          id: 'hy3', name: 'Hy3', contextWindow: 192_000, maxTokens: 64_000, supportsImages: true,
+          reasoning: { supports: true, onlyReasoning: true, canDisableThinking: false },
+          billing: { credits: 'x0.00', free: true, badges: ['限时免费'] },
+        },
+        {
+          id: 'plain', name: 'Plain', contextWindow: 1_000_000, maxTokens: 32_000, supportsImages: true,
+          reasoning: { supports: true, onlyReasoning: true, canDisableThinking: false },
+          billing: { free: false },
+        },
+      ],
+    })
+    const response = await requestOnce({ port, method: 'GET', headers: { host: `127.0.0.1:${String(port)}` } })
+    const body = JSON.parse(response.body) as { models?: readonly { id: string; contextWindow?: number }[] }
+    const models = body.models ?? []
+    // Verbatim from upstream: no rounding, and no tier of the plugin's own.
+    expect(models.find(model => model.id === 'glm-5.1')?.contextWindow).toBe(200_000)
+    expect(models.find(model => model.id === 'hy3')?.contextWindow).toBe(192_000)
+    // A model with no promo and no rate is still reported: capacity is the one
+    // fact the card needs for every model, not just the discounted ones.
+    expect(models.find(model => model.id === 'plain')?.contextWindow).toBe(1_000_000)
+  })
+
+  it('omits capacity when the upstream number is not usable', async () => {
+    const port = await startStatusServer({
+      models: (): readonly WorkBuddyUpstreamModel[] => [
+        {
+          id: 'broken', name: 'Broken', contextWindow: 0, maxTokens: 1_000, supportsImages: false,
+          reasoning: { supports: true, onlyReasoning: true, canDisableThinking: false },
+          billing: { free: false },
+        },
+      ],
+    })
+    const response = await requestOnce({ port, method: 'GET', headers: { host: `127.0.0.1:${String(port)}` } })
+    const body = JSON.parse(response.body) as { models?: readonly { id: string; contextWindow?: number }[] }
+    // A non-positive capacity is not reported rather than shown as "0".
+    expect(body.models?.find(model => model.id === 'broken')?.contextWindow).toBeUndefined()
+  })
+})
 
 describe('web status route gate', () => {
   it('serves a same-origin GET without an Origin header', async () => {

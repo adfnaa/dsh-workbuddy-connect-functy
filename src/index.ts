@@ -13,9 +13,15 @@ import { WorkBuddyCredentialStore } from './auth.ts'
 import { WorkBuddyCatalog } from './catalog.ts'
 import { createWorkBuddyAdapter, WORKBUDDY_PROVIDER } from './adapter.ts'
 import { createWorkBuddyShim } from './shim.ts'
+import { WorkBuddyProbeService } from './probe-service.ts'
+import { WorkBuddyProbeStore } from './probe-store.ts'
 import { WorkBuddyUpstreamClient } from './upstream.ts'
 import { registerWorkBuddyStatusRoute } from './web-status.ts'
+import { createProbeKey, registerWorkBuddyProbeRoute } from './probe-route.ts'
+import type { WorkBuddyModelInfo } from './catalog.ts'
+import type { WorkBuddyWebProbeSection } from './status-paths.ts'
 import { clearHostHeartbeat, writeHostHeartbeat } from './host-heartbeat.ts'
+import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
 
 export { WORKBUDDY_PROVIDER, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, createWorkBuddyAdapter, type WorkBuddyAdapter } from './adapter.ts'
 export { createWorkBuddyShim, type WorkBuddyShim } from './shim.ts'
@@ -24,6 +30,23 @@ export {
   WorkBuddyCatalog,
   type WorkBuddyModelInfo,
 } from './catalog.ts'
+export {
+  fingerprintModel,
+  WorkBuddyProbeStore,
+  workbuddyProbePath,
+  WORKBUDDY_PROBE_FILENAME,
+  type WorkBuddyProbeRecord,
+  type WorkBuddyProbeValidation,
+} from './probe-store.ts'
+export {
+  PROBE_EFFORT_CANDIDATES,
+  randomSentinel,
+  probeModel,
+  type ProbeAttempt,
+  type ProbeOutcome,
+  type ProbeSender,
+} from './probe.ts'
+export { WorkBuddyProbeService, type WorkBuddyProbeStatus } from './probe-service.ts'
 export {
   defaultDesktopAuthCandidates,
   defaultDesktopAuthPath,
@@ -84,10 +107,26 @@ export const WORKBUDDY_SETTINGS_NS = 'workbuddy' as SettingsNamespace
 export interface Config {
   /** Explicit WorkBuddy desktop auth-file path, overriding env and platform defaults. */
   authFile?: string
+  /**
+   * Whether the user has authorized sending probe requests about reasoning
+   * efforts. Off by default: a probe spends real credit, so nothing is sent
+   * until the user explicitly agrees.
+   */
+  probeConsent?: boolean
+  /**
+   * Whether new or changed undeclared models are probed automatically after a
+   * catalog refresh. Separate from `probeConsent` on purpose — agreeing to a
+   * one-off probe must not silently enroll the user in a standing sweep.
+   */
+  probeAuto?: boolean
 }
 
 export const Config: z<Config> = z.object({
   authFile: z.string().description('WorkBuddy desktop auth file (defaults to the app\'s own location)'),
+  probeConsent: z.boolean().default(false)
+    .description('Authorize reasoning-effort probes (each probe sends real requests that may consume credit)'),
+  probeAuto: z.boolean().default(false)
+    .description('Probe new or changed undeclared models automatically after a catalog refresh'),
 })
 
 /**
@@ -105,9 +144,75 @@ export function apply(ctx: Context, config: Config): void {
   const catalog = new WorkBuddyCatalog()
   const shim = createWorkBuddyShim({ store, client, catalog, logger: ctx.logger })
 
-  // Same-origin status route backing the Plugin-configuration card; the
-  // webServer service is optional (a headless profile serves no browser).
-  ctx.inject(['webServer'], webCtx => registerWorkBuddyStatusRoute(webCtx, { store, client, models: () => catalog.current() }))
+  // Live configuration source: starts as the applied config and is replaced by
+  // the settings section's source once one is installed, so edits reach the
+  // probe consent gate without a restart.
+  let current = () => config
+
+  // Probe state and the serial runner. Nothing here performs a request by
+  // itself: `consent()` is consulted before every sweep, and the config default
+  // is off, so an install that never opts in behaves exactly as before.
+  const probeStore = new WorkBuddyProbeStore({ pluginVersion: WORKBUDDY_CONNECT_VERSION })
+  const probeService = new WorkBuddyProbeService({
+    store: probeStore,
+    catalog,
+    credentials: store,
+    client,
+    consent: () => current().probeConsent === true,
+  })
+
+  /**
+   * Whether a model is a manual-probe candidate: it reasons, the upstream
+   * declares no effort set for it, and no live observation has answered it.
+   */
+  const isProbeCandidate = (info: WorkBuddyModelInfo): boolean => {
+    if (info.reasoning?.supports !== true) return false
+    if ((info.reasoning.supportedEfforts?.length ?? 0) > 0) return false
+    const record = probeService.recordFor(info.id)
+    return record === undefined || record.validation === 'unknown'
+  }
+
+  /** Compact probe state for the card: consent, candidates, observations. */
+  const probeSection = (): WorkBuddyWebProbeSection => {
+    const config = current()
+    const records = probeStore.all()
+    return {
+      consent: config.probeConsent === true,
+      auto: config.probeAuto === true,
+      running: probeService.isRunning(),
+      candidates: catalog.current().filter(isProbeCandidate).map(info => info.id),
+      results: Object.entries(records).map(([id, record]) => ({
+        id,
+        name: catalog.current().find(info => info.id === id)?.name ?? id,
+        validation: record.validation,
+        efforts: record.efforts,
+        probedAt: record.probedAtMs,
+      })),
+    }
+  }
+
+  // Same-origin routes backing the Plugin-configuration card; the webServer
+  // service is optional (a headless profile serves no browser).
+  const probeKey = createProbeKey()
+  let refreshProbeModels = () => {}
+  ctx.inject(['webServer'], webCtx => {
+    registerWorkBuddyStatusRoute(webCtx, {
+      store,
+      client,
+      models: () => catalog.current(),
+      probe: () => probeSection(),
+      probeKey,
+    })
+    registerWorkBuddyProbeRoute(webCtx, {
+      probe: async modelId => {
+        // The authenticated manual endpoint is called only after per-model confirmation.
+        const result = await probeService.probe(modelId, true)
+        if (result.state === 'ok') refreshProbeModels()
+        return result
+      },
+      clear: () => { probeStore.clear(); refreshProbeModels() },
+    }, probeKey)
+  })
 
   // The settings section is what makes the provider visible on the Models
   // settings page (settings.describe joins the provider directory), and it
@@ -118,7 +223,6 @@ export function apply(ctx: Context, config: Config): void {
   // has to wait for a settings service to exist — exactly what the inject
   // below does. Without one the plugin still serves its models; it simply has
   // no user-editable section, as before.
-  let current = () => config
   ctx.inject(['settings'], settingsCtx => {
     settingsCtx.settings.installSection(ctx, WORKBUDDY_SETTINGS_NS, Config, config, {
       setSource(source) { current = source },
@@ -149,8 +253,14 @@ export function apply(ctx: Context, config: Config): void {
           store,
           catalog,
           resolveAttachments: () => ctx.get('attachments'),
+          observe: modelId => probeService.recordFor(modelId),
         })
         invalidate = workbuddy.invalidate
+        refreshProbeModels = () => {
+          if (stopped) return
+          workbuddy.invalidate()
+          ctx.emit('llm/adapters-updated')
+        }
 
         let releaseAdapter: (() => void) | undefined
         let releaseDirectory: (() => void) | undefined
