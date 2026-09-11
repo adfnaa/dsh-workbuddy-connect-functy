@@ -56,7 +56,6 @@ export const AI_CARD_VARIANT: WorkBuddyCardVariant = {
 
 /** Both cards, in display order. */
 export const CARD_VARIANTS: readonly WorkBuddyCardVariant[] = [CN_CARD_VARIANT, AI_CARD_VARIANT]
-
 /** Props delivered by the Plugin configuration item slot. */
 export type WorkBuddyPluginCardProps =
   PropsRuntime<'settings.plugin.item'>

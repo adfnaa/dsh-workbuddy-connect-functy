@@ -315,6 +315,7 @@ describe('promotion lifetime', () => {
     name: 'Hy3',
     contextWindow: 1000,
     maxTokens: 100,
+    supportsImages: false,
     billing: { credits: 'x0.50', free: false },
     promotions: [{
       start: Date.parse('2026-07-06T00:00:00+08:00'),
@@ -353,7 +354,7 @@ describe('promotion lifetime', () => {
   })
 
   it('leaves a model with no promotions untouched', () => {
-    const plain = { id: 'x', name: 'X', contextWindow: 1, maxTokens: 1, billing: { credits: 'x1.00', free: false } }
+    const plain = { id: 'x', name: 'X', contextWindow: 1, maxTokens: 1, supportsImages: false, billing: { credits: 'x1.00', free: false } }
     expect(modelWithCurrentPromotion(plain, Date.now())).toBe(plain)
   })
 
@@ -361,7 +362,7 @@ describe('promotion lifetime', () => {
     // The international Auto row carries an empty credits string. A factor of 0
     // is still meaningful there; a multiplier is not, so it is skipped rather
     // than invented.
-    const auto = { id: 'default-model', name: 'Auto', contextWindow: 1, maxTokens: 1, billing: { credits: '', free: false }, promotions: base.promotions }
+    const auto = { id: 'default-model', name: 'Auto', contextWindow: 1, maxTokens: 1, supportsImages: false, billing: { credits: '', free: false }, promotions: base.promotions }
     expect(modelWithCurrentPromotion(auto, Date.parse('2026-08-01T00:00:00+08:00')).billing?.credits).toBe('x0.00')
     const scaledInput = {
       ...auto,
