@@ -120,6 +120,9 @@ describe('WorkBuddy Host settings integration', () => {
   it('registers both variants and keeps each variant identity separate', async () => {
     root = await mkdtemp(join(tmpdir(), 'dsh-workbuddy-connect-dual-'))
     vi.stubEnv('DSH_HOME', root)
+    // Shorten the credential sweep: the assertions below change a setting and
+    // then wait for the group to react, which only happens on a sweep.
+    vi.stubEnv('DSH_WORKBUDDY_POLL_MS', '100')
     // One real-shaped credential per product, in separate files. The upstream
     // fetch is stubbed to fail so the assertion covers the per-variant fallback
     // rosters rather than depending on the network.
@@ -177,10 +180,34 @@ describe('WorkBuddy Host settings integration', () => {
     expect(fieldsOf('workbuddy')).not.toContain('authFileAI')
     expect(fieldsOf('workbuddy-ai')).toEqual(['authFileAI'])
 
-    // A write through one section reaches only that section's store, and the
-    // merged view the plugin reads still resolves both paths.
-    await ctx.settings.update('workbuddy-ai', { authFileAI: '/tmp/ai.info' })
-    expect(fieldsOf('workbuddy')).not.toContain('authFileAI')
+    // A write through one section must reach ONLY that variant's store. The
+    // schema assertions above prove the two forms are split; this proves the
+    // wiring behind them is too. Without it, a section could carry the right
+    // field while `onChange` handed it to the wrong store and nothing above
+    // would notice.
+    //
+    // Observable chosen deliberately: point `authFileAI` at a file holding a
+    // CN-domain credential. If the write really reached the AI store, that
+    // store refuses the cross-product credential and the AI group empties; the
+    // CN group must be untouched. A mis-routed write would instead empty the
+    // CN group — so the assertion distinguishes "reached the AI store" from
+    // "reached some store".
+    const wrongRegionForAi = join(root, 'cn-credential-for-ai.info')
+    await writeFile(wrongRegionForAi, credentialDocument('copilot.tencent.com'))
+    await ctx.settings.update('workbuddy-ai', { authFileAI: wrongRegionForAi })
+    // A bounded settle rather than waitFor: if the wiring were broken the group
+    // would simply never change, and an assertion states that plainly instead
+    // of surfacing as a timeout. Two sweeps at the 100 ms interval above.
+    await new Promise(resolve => setTimeout(resolve, 400))
+    expect(await ctx.llm.listModels('workbuddy-ai')).toEqual([])
+    expect((await ctx.llm.listModels('workbuddy')).length).toBeGreaterThan(0)
+
+    // And the setting is genuinely read back through the merged config: putting
+    // a valid international file back restores the group.
+    await ctx.settings.update('workbuddy-ai', { authFileAI: aiFile })
+    await vi.waitFor(async () => {
+      expect((await ctx.llm.listModels('workbuddy-ai')).length).toBeGreaterThan(0)
+    }, { timeout: 10_000 })
 
     await vi.waitFor(async () => {
       expect((await ctx.llm.listModels('workbuddy')).length).toBeGreaterThan(0)
