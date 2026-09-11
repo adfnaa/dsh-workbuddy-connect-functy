@@ -109,10 +109,19 @@ const modelBadgeChipStyle: CSSProperties = {
   color: 'var(--dsw-alias-state-success-primary, #22a06b)',
 }
 
-/** Localize an upstream promotional badge label, with an unknown-badge fallback. */
+/**
+ * Localize an upstream promotional badge label, with an unknown-badge fallback.
+ *
+ * The CN catalog spells badges in Chinese (`限时免费`, `夜间折扣`); the
+ * international document's `modelPromotions` carries English (`Free now`). Both
+ * are mapped so the same promotion reads consistently in either UI language,
+ * and anything else passes through verbatim — an unrecognized badge is still
+ * information the upstream chose to show.
+ */
 function modelBadgeLabel(badge: string, t: WorkBuddyPluginCardInjected['t']): string {
   if (badge === '限时免费') return t('badgeLimitedFree')
   if (badge === '夜间折扣') return t('badgeNightDiscount')
+  if (badge === 'Free now') return t('badgeFreeNow')
   return badge
 }
 const progressTrackStyle: CSSProperties = { height: 8, overflow: 'hidden', borderRadius: 999, background: 'var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.08))' }
@@ -270,10 +279,13 @@ function ModelOfferRow({ model, t }: {
  * reference data you scan by model, and hiding most of it behind a hover made
  * the common case (a model you already have in mind) the hard one to look up.
  *
- * Purely a report of the upstream's own number. The plugin offers no tier
- * picker: the catalog declares one capacity per model and publishes no
- * alternatives, so a menu would mean inventing client-side policy. (The
- * desktop app's "300K / 1M" selector appears nowhere in the API.)
+ * Purely a report of the upstream's own numbers. The plugin offers no tier
+ * picker: the CN catalog declares one capacity per model and publishes no
+ * alternatives, so a menu there would mean inventing client-side policy. The
+ * international document does declare alternatives (`supportedLengths`), and
+ * they are shown as a secondary figure rather than merged into one number —
+ * the default is the budget actually requested, while the larger value is a
+ * ceiling the upstream would accept.
  */
 function ContextTable({ models, t }: {
   models: readonly WorkBuddyWebModelBadge[] | undefined
@@ -288,12 +300,25 @@ function ContextTable({ models, t }: {
   return (
     <div style={quotaListStyle}>
       <h3 style={quotaTitleStyle}>{t('contextHeading')}</h3>
-      {known.map(model => (
-        <div key={model.id} style={quotaLabelStyle}>
-          <span>{model.name}</span>
-          <span>{formatTokens(model.contextWindow as number)}</span>
-        </div>
-      ))}
+      {known.map(model => {
+        const capacity = model.contextWindow as number
+        // Only shown when the upstream declared a larger alternative, so the
+        // CN list (which declares none) is unchanged.
+        const alternative = model.maxContextWindow !== undefined && model.maxContextWindow > capacity
+          ? model.maxContextWindow
+          : undefined
+        return (
+          <div key={model.id} style={quotaLabelStyle}>
+            <span>{model.name}</span>
+            <span style={modelOfferStyle}>
+              <span style={{ textAlign: 'right' }}>{formatTokens(capacity)}</span>
+              {alternative === undefined
+                ? null
+                : <span style={modelRateStyle}>{t('contextUpTo', { size: formatTokens(alternative) })}</span>}
+            </span>
+          </div>
+        )
+      })}
     </div>
   )
 }

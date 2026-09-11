@@ -83,14 +83,26 @@ export interface WorkBuddyWebModelBadge {
   credits?: string
   /**
    * Context capacity in tokens, taken verbatim from the upstream
-   * `maxAllowedSize`/`maxInputTokens`.
+   * `maxAllowedSize`/`maxInputTokens`, or from the international document's
+   * `contextWindow.defaultLength` when it declares one.
    *
-   * Reported, never chosen: the upstream describes one capacity per model and
-   * publishes no tiers, so the plugin displays what it was told rather than
-   * offering a menu of its own. (The desktop app's "300K / 1M" picker is
-   * client-side policy that appears nowhere in the catalog.)
+   * Reported, never chosen: the upstream describes one effective capacity per
+   * model, so the plugin displays what it was told rather than offering a menu
+   * of its own. (The desktop app's "300K / 1M" picker is client-side policy
+   * that appears nowhere in the catalog.)
    */
   contextWindow?: number
+  /**
+   * The international document's larger selectable window, when it declares
+   * one, and the model's maximum input ceiling.
+   *
+   * Kept apart from {@link contextWindow} because they answer different
+   * questions: `contextWindow` is the budget the plugin actually requests under,
+   * while these are facts about what the upstream will accept. Showing the 1M
+   * ceiling as though it were the working window would overstate the budget.
+   */
+  maxContextWindow?: number
+  maxInputTokens?: number
 }
 
 /** The JSON document the plugin card renders. */

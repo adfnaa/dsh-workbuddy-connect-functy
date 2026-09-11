@@ -103,6 +103,11 @@ export async function workBuddyWebStatus(
   const modelsField: readonly WorkBuddyWebModelBadge[] = models
     .map(model => {
       const rate = normalizeCredits(model.billing?.credits)
+      // The largest window the upstream declares for this model, when it
+      // declares alternatives; equal to `contextWindow` otherwise, and omitted
+      // when the upstream said nothing.
+      const supported = model.supportedContextWindows ?? []
+      const maxContextWindow = supported.length > 0 ? Math.max(...supported) : undefined
       return {
         id: model.id,
         name: model.name,
@@ -112,6 +117,12 @@ export async function workBuddyWebStatus(
         // Verbatim from the upstream catalog; omitted when it said nothing.
         ...typeof model.contextWindow === 'number' && model.contextWindow > 0
           ? { contextWindow: model.contextWindow }
+          : {},
+        ...maxContextWindow === undefined || maxContextWindow === model.contextWindow
+          ? {}
+          : { maxContextWindow },
+        ...typeof model.maxInputTokens === 'number' && model.maxInputTokens > 0
+          ? { maxInputTokens: model.maxInputTokens }
           : {},
       }
     })
