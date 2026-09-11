@@ -36,7 +36,16 @@ export interface WorkBuddyProbeControlProps extends WorkBuddyPluginCardInjected 
 const RECONCILE_MS = 60_000
 
 
-const wrapperStyle: CSSProperties = { display: 'inline-flex', position: 'relative', alignItems: 'center' }
+// The host slot's baseline sits a touch high and leaves a full inter-control gap
+// before the model picker. Nudge only this annotation down and inward so it
+// reads as part of the selected model rather than a separate toolbar item.
+const wrapperStyle: CSSProperties = {
+  display: 'inline-flex',
+  position: 'relative',
+  alignItems: 'center',
+  transform: 'translateY(2px)',
+  marginRight: -8,
+}
 const buttonStyle: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
