@@ -147,8 +147,41 @@ export const WORKBUDDY_SETTINGS_NS = 'workbuddy' as SettingsNamespace
  * is already running, so the model group would not appear until a restart. This
  * poll is a cheap existence/parse read of at most a few local files: it never
  * contacts the network and never runs a reasoning probe.
+ *
+ * `DSH_WORKBUDDY_POLL_MS` overrides it. That exists so the sweep can be
+ * exercised end to end in tests and shortened while diagnosing a slow sign-in
+ * on a real machine; it is not a product setting and no UI exposes it. The
+ * value is clamped to a sane range so a mistaken override cannot turn the poll
+ * into a busy loop.
  */
 const CREDENTIAL_POLL_MS = 30_000
+
+/** Floor and ceiling for the overridable poll interval. */
+const MIN_POLL_MS = 100
+const MAX_POLL_MS = 24 * 60 * 60 * 1000
+
+/** Resolve the sweep interval, honoring the override when it is usable. */
+function credentialPollMs(): number {
+  const override = Number(process.env['DSH_WORKBUDDY_POLL_MS'])
+  if (!Number.isFinite(override) || override < MIN_POLL_MS) return CREDENTIAL_POLL_MS
+  return Math.min(override, MAX_POLL_MS)
+}
+
+/**
+ * How long to wait before retrying a catalog fetch that failed.
+ *
+ * The credential sweep deliberately does not re-fetch a catalog it already has
+ * (a same-identity token rotation carries no new model information). But a
+ * *failed* fetch must not be treated the same way: without a retry, one
+ * transient network blip at startup would leave the group on the built-in
+ * fallback roster until the user noticed and pressed refresh. This bound keeps
+ * that recovery automatic while still honoring the "not every round" rule — at
+ * most one attempt per interval, and none at all once a live catalog lands.
+ *
+ * Expressed as a multiple of the sweep rather than a fixed duration so the two
+ * stay in proportion under the `DSH_WORKBUDDY_POLL_MS` override.
+ */
+const CATALOG_RETRY_SWEEPS = 10
 
 /** Plugin configuration. */
 export interface Config {
@@ -185,6 +218,8 @@ interface VariantRuntime {
   catalogSource: 'live' | 'fallback'
   /** Why the last catalog attempt failed, when it did. */
   catalogError: string | undefined
+  /** When the last catalog attempt started, for the retry backoff. */
+  lastFetchAtMs: number
   /** Notify the model directory that this variant's answers changed. */
   invalidate: () => void
   /** Whether the provider registered successfully. */
@@ -243,6 +278,7 @@ function createVariantRuntime(
     fallback,
     catalogSource: 'fallback',
     catalogError: undefined,
+    lastFetchAtMs: 0,
     invalidate: () => {},
     registered: false,
   }
@@ -498,6 +534,7 @@ export function apply(ctx: Context, config: Config): void {
   const fetchCatalog = async (runtime: VariantRuntime, identity: string): Promise<void> => {
     const credential = await runtime.store.current()
     if (credential === undefined) return
+    runtime.lastFetchAtMs = Date.now()
     try {
       const models = await runtime.client.fetchModels(credential)
       // Discard a response that arrived after the account changed: it describes
@@ -550,7 +587,16 @@ export function apply(ctx: Context, config: Config): void {
 
     const identity = `${credential.uid}:${credential.enterpriseId ?? ''}`
     const known = lastIdentities.get(id)
-    if (known === identity && runtime.catalog.isVisible()) return
+    if (known === identity && runtime.catalog.isVisible()) {
+      // Same account, already showing something. One case still needs a fetch:
+      // an earlier attempt failed, so the group is on the fallback roster and
+      // nothing else will ever replace it. Retry on a slow backoff rather than
+      // every sweep, so a persistent outage does not become a request loop.
+      const stale = runtime.catalogSource === 'fallback'
+      const due = Date.now() - runtime.lastFetchAtMs >= credentialPollMs() * CATALOG_RETRY_SWEEPS
+      if (stale && due) await fetchCatalog(runtime, identity)
+      return
+    }
 
     const switched = known !== undefined && known !== identity
     lastIdentities.set(id, identity)
@@ -586,7 +632,7 @@ export function apply(ctx: Context, config: Config): void {
     if (runtimes.some(runtime => runtime.registered)) void writeHostHeartbeat()
 
     void syncAll()
-    const timer = setInterval(() => { void syncAll() }, CREDENTIAL_POLL_MS)
+    const timer = setInterval(() => { void syncAll() }, credentialPollMs())
     timer.unref?.()
     timers.push(timer)
   })
