@@ -7,6 +7,7 @@
  * @module dsh-workbuddy-connect/upstream
  */
 
+import { appUserAgent, resolveAppVersion, type AppVersionInfo } from './app-version.ts'
 import type { WorkBuddyCredential } from './auth.ts'
 import type { ProbeAttempt } from './probe.ts'
 import { PROBE_MAX_TOKENS, PROBE_PROMPT } from './probe.ts'
@@ -28,6 +29,10 @@ export interface WorkBuddyUpstreamModel {
   id: string
   name: string
   contextWindow: number
+  maxInputTokens?: number
+  supportedContextWindows?: readonly number[]
+  catalogSource?: string
+  promotions?: readonly WorkBuddyPromotion[]
   maxTokens: number
   /**
    * Upstream-declared image input capability. Missing or false upstream data
@@ -119,7 +124,7 @@ const ERROR_BODY_LIMIT = 4096
 
 /** Insufficient-credit markers, ASCII lowercase plus the original Chinese. */
 const HARD_CREDIT_MARKERS: readonly string[] = [
-  'insufficient credit', 'no credit', 'credit exhausted', 'out of credit',
+  'insufficient credit', 'no credit', 'credit exhausted', 'credits exhausted', 'out of credit',
   'quota exceeded', 'quota exhaust', 'payment required', 'credit not enough',
   'not enough credit',
   '积分不足', '额度不足', '余额不足', '积分用完', '额度用尽', '没有积分',
@@ -426,11 +431,43 @@ function envelopeError(status: number, envelope: Envelope): Error {
   return new Error(`workbuddy upstream ${kind} (http ${status}): ${envelope.msg.slice(0, 160)}`)
 }
 
+/** Provenance of one successful catalog fetch, surfaced by the status card. */
+export interface WorkBuddyCatalogFetch {
+  fetchedAtMs: number
+  /** Which document answered, e.g. `workbuddy-ai:app`. */
+  source: string
+  /** UA version used, when the request needed one. */
+  appVersion?: AppVersionInfo
+}
+
+/** Constructor dependencies. */
+export interface WorkBuddyUpstreamClientOptions {
+  /** App-version resolver for international catalog requests; injectable for tests. */
+  resolveAppVersion?: () => Promise<AppVersionInfo>
+}
+
 /**
  * Upstream HTTP client. One instance serves the whole plugin; requests take
  * the credential explicitly so token refreshes apply on the next call.
+ *
+ * One instance is *per variant*: the international provider needs its own
+ * catalog source, UA version, and probe differences, and keeping them on the
+ * instance avoids passing a variant through every call signature.
  */
 export class WorkBuddyUpstreamClient {
+  /**
+   * Resolves the App-shaped UA version for international catalog requests.
+   * Injectable so tests never read the real filesystem.
+   */
+  private readonly resolveAppVersion: () => Promise<AppVersionInfo>
+
+  /** Provenance of the most recent successful catalog fetch, for the card. */
+  lastCatalog: WorkBuddyCatalogFetch | undefined
+
+  constructor(options: WorkBuddyUpstreamClientOptions = {}) {
+    this.resolveAppVersion = options.resolveAppVersion ?? (() => resolveAppVersion())
+  }
+
   /** POST the chat endpoint; a successful answer is the raw SSE response. */
   async chatStream(
     credential: WorkBuddyCredential,
@@ -442,7 +479,7 @@ export class WorkBuddyUpstreamClient {
       response = await fetch(`${chatBase(credential)}/v2/chat/completions`, {
         method: 'POST',
         headers: { ...chatHeaders(credential), 'Authorization': `Bearer ${credential.accessToken}` },
-        body: bodyJson,
+        body: regionOf(credential.domain) === 'global' ? prepareInternationalChatBody(bodyJson) : bodyJson,
         ...signal === undefined ? {} : { signal },
       })
     } catch (error: unknown) {
@@ -479,60 +516,45 @@ export class WorkBuddyUpstreamClient {
     return outcome
   }
 
-  /** GET the personal model catalog and keep the `cli` agent's models only. */
-  async fetchModels(credential: WorkBuddyCredential): Promise<readonly WorkBuddyUpstreamModel[]> {    const response = await fetch(`${chatBase(credential)}/console/enterprises/personal/models`, {
+  /**
+   * GET the personal model catalog.
+   *
+   * Two upstream documents feed this, one per variant:
+   *
+   * - CN (`workbuddy`): `/console/enterprises/personal/models`, the document
+   *   the official CLI itself consumes. Unchanged behaviour.
+   * - International (`workbuddy-ai`): `/v3/config`, the product document the
+   *   App's main process fetches. The gateway splits it by User-Agent, so this
+   *   request carries the App-shaped UA while every other request keeps the
+   *   CLI UA it has always sent.
+   *
+   * Both are unwrapped and classified the same way — `readEnvelope` plus
+   * `envelopeError` — so an expired session or exhausted credit is reported as
+   * such rather than as a generic catalog failure.
+   */
+  async fetchModels(credential: WorkBuddyCredential): Promise<readonly WorkBuddyUpstreamModel[]> {
+    const international = regionOf(credential.domain) === 'global'
+    const appVersion = international ? await resolveAppVersion() : undefined
+    const response = await fetch(`${chatBase(credential)}${international ? '/v3/config' : '/console/enterprises/personal/models'}`, {
       headers: {
-        'Authorization': `Bearer ${credential.accessToken}`,
-        'Accept': 'application/json',
-        'Origin': originReferer(credential),
-        'Referer': `${originReferer(credential)}/`,
-        'User-Agent': CLIENT_UA,
+        Authorization: `Bearer ${credential.accessToken}`,
+        Accept: 'application/json',
+        Origin: originReferer(credential),
+        Referer: `${originReferer(credential)}/`,
+        ...international ? { 'X-Requested-With': 'XMLHttpRequest', 'X-Product': 'SaaS' } : {},
+        'User-Agent': appVersion === undefined ? CLIENT_UA : appUserAgent(appVersion.version),
       },
       signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
     })
     const envelope = await readEnvelope(response)
     if (!response.ok || envelope.code !== 0) throw envelopeError(response.status, envelope)
-    const data = typeof envelope.data === 'object' && envelope.data !== null
-      ? envelope.data as Record<string, unknown>
-      : {}
-    const rawModels = Array.isArray(data['models']) ? data['models'] : []
-    const agents = Array.isArray(data['agents']) ? data['agents'] : []
-    let cliIds: readonly string[] | undefined
-    for (const agent of agents) {
-      if (typeof agent === 'object' && agent !== null) {
-        const wrapped = agent as Record<string, unknown>
-        if (wrapped['name'] === 'cli' && Array.isArray(wrapped['models'])) {
-          cliIds = wrapped['models'].filter((id): id is string => typeof id === 'string')
-          break
-        }
-      }
+    const data = isObject(envelope.data) ? envelope.data : {}
+    const models = parseModelCatalog(data, international)
+    this.lastCatalog = {
+      fetchedAtMs: Date.now(),
+      source: international ? 'workbuddy-ai:app' : 'workbuddy:cli',
+      ...appVersion === undefined ? {} : { appVersion },
     }
-    if (cliIds === undefined || cliIds.length === 0) {
-      throw new Error('workbuddy model catalog lists no cli agent models')
-    }
-    const byId = new Map<string, WorkBuddyUpstreamModel>()
-    for (const model of rawModels) {
-      if (typeof model !== 'object' || model === null) continue
-      const wrapped = model as Record<string, unknown>
-      const id = typeof wrapped['id'] === 'string' ? wrapped['id'] : ''
-      if (id === '' || wrapped['disabled'] === true) continue
-      const input = typeof wrapped['maxInputTokens'] === 'number' ? wrapped['maxInputTokens'] : 0
-      const output = typeof wrapped['maxOutputTokens'] === 'number' ? wrapped['maxOutputTokens'] : 0
-      if (input <= 0 || output <= 0) continue
-      byId.set(id, {
-        id,
-        name: typeof wrapped['name'] === 'string' && wrapped['name'] !== '' ? wrapped['name'] : id,
-        contextWindow: input,
-        maxTokens: output,
-        supportsImages: wrapped['supportsImages'] === true && wrapped['disabledMultimodal'] !== true,
-        ...resolveUpstreamReasoning(wrapped),
-        ...resolveUpstreamBilling(wrapped),
-      })
-    }
-    const models = cliIds
-      .map(id => byId.get(id))
-      .filter((model): model is WorkBuddyUpstreamModel => model !== undefined)
-    if (models.length === 0) throw new Error('workbuddy model catalog resolved to an empty list')
     return models
   }
 
@@ -620,8 +642,8 @@ export class WorkBuddyUpstreamClient {
     const payload: Record<string, unknown> = {
       model,
       stream: true,
-      messages: [{ role: 'user', content: PROBE_PROMPT }],
-      max_tokens: PROBE_MAX_TOKENS,
+      messages: [...(regionOf(credential.domain) === 'global' ? [{ role: 'system', content: 'You are a helpful assistant.' }] : []), { role: 'user', content: PROBE_PROMPT }],
+      max_tokens: regionOf(credential.domain) === 'global' ? 16 : PROBE_MAX_TOKENS,
     }
     if (effort !== undefined) payload['reasoning_effort'] = effort
 
@@ -691,4 +713,101 @@ async function readFirstEvent(response: Response): Promise<boolean> {
   } finally {
     await reader.cancel().catch(() => {})
   }
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+function positive(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+}
+/** Parse either response shape after its envelope has been checked. */
+export function parseModelCatalog(data: Record<string, unknown>, international = false): readonly WorkBuddyUpstreamModel[] {
+    const rawModels = Array.isArray(data['models']) ? data['models'] : []
+    const agents = Array.isArray(data['agents']) ? data['agents'] : []
+    let cliIds: readonly string[] | undefined
+    for (const agent of agents) {
+      if (typeof agent === 'object' && agent !== null) {
+        const wrapped = agent as Record<string, unknown>
+        if (wrapped['name'] === 'cli' && Array.isArray(wrapped['models'])) {
+          cliIds = wrapped['models'].filter((id): id is string => typeof id === 'string')
+          break
+        }
+      }
+    }
+    if (cliIds === undefined || cliIds.length === 0) {
+      throw new Error('workbuddy model catalog lists no cli agent models')
+    }
+    const byId = new Map<string, WorkBuddyUpstreamModel>()
+    for (const model of rawModels) {
+      if (typeof model !== 'object' || model === null) continue
+      const wrapped = model as Record<string, unknown>
+      const id = typeof wrapped['id'] === 'string' ? wrapped['id'] : ''
+      if (id === '' || wrapped['disabled'] === true) continue
+      const input = typeof wrapped['maxInputTokens'] === 'number' ? wrapped['maxInputTokens'] : 0
+      const output = typeof wrapped['maxOutputTokens'] === 'number' ? wrapped['maxOutputTokens'] : 0
+      if (input <= 0 || output <= 0) continue
+      byId.set(id, {
+        id,
+        name: typeof wrapped['name'] === 'string' && wrapped['name'] !== '' ? wrapped['name'] : id,
+        contextWindow: international && isObject(wrapped['contextWindow']) && positive(wrapped['contextWindow']['defaultLength'])
+          ? wrapped['contextWindow']['defaultLength'] : input,
+        ...(international ? {
+          maxInputTokens: input,
+          catalogSource: 'workbuddy-ai:app',
+          supportedContextWindows: isObject(wrapped['contextWindow']) && Array.isArray(wrapped['contextWindow']['supportedLengths'])
+            ? wrapped['contextWindow']['supportedLengths'].filter(positive) : [],
+          promotions: parsePromotions(data['modelPromotions'], id),
+        } : {}),
+        maxTokens: output,
+        supportsImages: wrapped['supportsImages'] === true && wrapped['disabledMultimodal'] !== true,
+        ...resolveUpstreamReasoning(wrapped),
+        ...resolveUpstreamBilling(wrapped),
+      })
+    }
+    const models = cliIds
+      .map(id => byId.get(id))
+      .filter((model): model is WorkBuddyUpstreamModel => model !== undefined)
+    if (models.length === 0) throw new Error('workbuddy model catalog resolved to an empty list')
+    return models
+}
+
+/** Only the dated replacement-discount shape verified in the App catalog. */
+export interface WorkBuddyPromotion {
+  start: number
+  end: number
+  label: string
+  factor: number
+  priority: number
+}
+function parsePromotions(value: unknown, model: string): WorkBuddyPromotion[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap(item => {
+    if (!isObject(item) || item['enabled'] !== true || !Array.isArray(item['modelIds']) || !item['modelIds'].includes(model)) return []
+    const schedule = item['schedule'], discount = item['discount'], badge = item['badge']
+    if (!isObject(schedule) || !isObject(discount) || !isObject(badge) || discount['displayMode'] !== 'replace') return []
+    const start = typeof schedule['validFrom'] === 'string' ? Date.parse(schedule['validFrom']) : NaN
+    const end = typeof schedule['validUntil'] === 'string' ? Date.parse(schedule['validUntil']) : NaN
+    const factor = discount['factor']
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || typeof factor !== 'number' || !Number.isFinite(factor) || factor < 0) return []
+    return [{ start, end, factor, label: typeof badge['label'] === 'string' ? badge['label'] : '', priority: typeof item['priority'] === 'number' ? item['priority'] : 0 }]
+  })
+}
+/** Re-evaluate promotions on reads so a cached Free now label can expire. */
+export function modelWithCurrentPromotion(model: WorkBuddyUpstreamModel, now = Date.now()): WorkBuddyUpstreamModel {
+  if (!model.promotions?.length) return model
+  const promotion = [...model.promotions].sort((a, b) => b.priority - a.priority).find(p => now >= p.start && now < p.end)
+  if (!promotion) return model
+  const rate = normalizeCredits(model.billing?.credits)
+  const original = rate?.startsWith('x') ? Number(rate.slice(1)) : NaN
+  if (promotion.factor !== 0 && !Number.isFinite(original)) return model
+  const value = promotion.factor === 0 ? 0 : original * promotion.factor
+  return { ...model, billing: { ...model.billing, free: value === 0, credits: `x${value.toFixed(2)}`, badges: [...(model.billing?.badges ?? []), ...(promotion.label ? [promotion.label] : [])] } }
+}
+export function prepareInternationalChatBody(body: string): string {
+  const parsed = JSON.parse(prepareChatBody(body)) as Record<string, unknown>
+  if (Array.isArray(parsed['messages']) && (!isObject(parsed['messages'][0]) || parsed['messages'][0]['role'] !== 'system')) {
+    parsed['messages'].unshift({ role: 'system', content: 'You are a helpful assistant.' })
+  }
+  return JSON.stringify(parsed)
 }

@@ -14,6 +14,17 @@ export const WORKBUDDY_STATUS_PATH = '/plugins/dsh-workbuddy-connect/status'
  */
 export const WORKBUDDY_PROBE_PATH = '/plugins/dsh-workbuddy-connect/probe'
 
+/**
+ * The international (WorkBuddy AI) variant's own pair of routes.
+ *
+ * Kept as separate constants rather than a computed suffix so both halves
+ * reference literal strings: the browser bundle and the host bundle are built
+ * independently, and a shared expression is one build-config drift away from
+ * the desk asking a route the host never mounted.
+ */
+export const WORKBUDDY_AI_STATUS_PATH = '/plugins/dsh-workbuddy-connect/ai/status'
+export const WORKBUDDY_AI_PROBE_PATH = '/plugins/dsh-workbuddy-connect/ai/probe'
+
 /** One model's recorded probe observation, as the card displays it. */
 export interface WorkBuddyWebProbeModel {
   id: string

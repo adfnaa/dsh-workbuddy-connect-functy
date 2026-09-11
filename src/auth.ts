@@ -10,9 +10,11 @@
 
 import { readFile, rm, stat } from 'node:fs/promises'
 import { homedir, release } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import { regionOf } from './upstream.ts'
+import type { WorkBuddyVariant } from './variants.ts'
 import type { WorkBuddyRefreshOutcome } from './upstream.ts'
 
 /** Normalized WorkBuddy credential, timestamps in epoch milliseconds. */
@@ -41,6 +43,7 @@ export interface WorkBuddyAuthStatus {
 
 /** Constructor options; only {@link refresh} is required. */
 export interface WorkBuddyStoreOptions {
+  variant?: WorkBuddyVariant
   /** Explicit desktop auth-file path, overriding env and platform defaults. */
   desktopPath?: string
   /** Explicit plugin-owned copy path, defaulting under `$DSH_HOME`. */
@@ -128,9 +131,21 @@ export function defaultDesktopAuthCandidates(): string[] {
   return []
 }
 
+/**
+ * The platform-default candidates for one variant, in probe order.
+ *
+ * Both apps write into the *same* shared `CodeBuddyExtension` auth directory
+ * and differ only in the file's basename, so the per-platform ordering above
+ * is reused verbatim and just the filename is swapped.
+ */
+export function desktopAuthCandidatesFor(variant: WorkBuddyVariant): string[] {
+  return defaultDesktopAuthCandidates().map(path => join(dirname(path), variant.desktopFilename))
+}
+
 /** First platform-default candidate; see {@link defaultDesktopAuthCandidates}. */
-export function defaultDesktopAuthPath(): string | undefined {
-  return defaultDesktopAuthCandidates()[0]
+export function defaultDesktopAuthPath(variant?: WorkBuddyVariant): string | undefined {
+  const candidates = variant === undefined ? defaultDesktopAuthCandidates() : desktopAuthCandidatesFor(variant)
+  return candidates[0]
 }
 
 /** Normalize an expiry that may arrive in seconds or milliseconds. */
@@ -245,6 +260,7 @@ function isENOENT(error: unknown): boolean {
  * not take down a working session.
  */
 export class WorkBuddyCredentialStore {
+  private readonly variant: WorkBuddyVariant | undefined
   private readonly refresh: WorkBuddyStoreOptions['refresh']
   private readonly refreshMarginMs: number
   private readonly ownPath: string
@@ -252,9 +268,10 @@ export class WorkBuddyCredentialStore {
   private inflight: Promise<WorkBuddyCredential> | undefined
 
   constructor(options: WorkBuddyStoreOptions) {
+    this.variant = options.variant
     this.refresh = options.refresh
     this.refreshMarginMs = options.refreshMarginMs ?? 5 * 60 * 1000
-    this.ownPath = options.ownPath ?? workbuddyOwnAuthPath()
+    this.ownPath = options.ownPath ?? (options.variant ? join(resolveDshHome(), options.variant.ownFilename) : workbuddyOwnAuthPath())
     this.desktopPathOverride = options.desktopPath
   }
 
@@ -264,11 +281,13 @@ export class WorkBuddyCredentialStore {
    * explicit path is used verbatim; the defaults are a probe order.
    */
   private resolveDesktopCandidates(): string[] {
-    const fromEnv = process.env[WORKBUDDY_AUTH_FILE_ENV]
+    const fromEnv = process.env[this.variant?.env ?? WORKBUDDY_AUTH_FILE_ENV]
     const explicit = this.desktopPathOverride
       ?? (fromEnv !== undefined && fromEnv.trim() !== '' ? fromEnv : undefined)
     if (explicit !== undefined) return [explicit]
-    return defaultDesktopAuthCandidates()
+    return this.variant === undefined
+      ? defaultDesktopAuthCandidates()
+      : desktopAuthCandidatesFor(this.variant)
   }
 
   private resolveDesktopPath(): string | undefined {
@@ -294,7 +313,14 @@ export class WorkBuddyCredentialStore {
 
   /** Read the freshest stored credential without refreshing anything. */
   async current(): Promise<WorkBuddyCredential | undefined> {
-    const [desktop, own] = await Promise.all([this.readDesktop(), this.readOwn()])
+    let [desktop, own] = await Promise.all([this.readDesktop(), this.readOwn()])
+    for (const credential of [desktop, own]) {
+      if (credential && this.variant && regionOf(credential.domain) !== this.variant.region) {
+        throw new Error(`${this.variant.displayName}: credential belongs to another region; configure the matching provider`)
+      }
+    }
+    // A desktop account switch takes precedence over a later-expiring old copy.
+    if (desktop && own && (desktop.uid !== own.uid || desktop.enterpriseId !== own.enterpriseId)) return desktop
     if (desktop === undefined) return own
     if (own === undefined) return desktop
     return own.expiresAtMs > desktop.expiresAtMs ? own : desktop
@@ -309,9 +335,10 @@ export class WorkBuddyCredentialStore {
     if (credential === undefined) {
       const candidates = this.resolveDesktopCandidates()
       const desktop = candidates.length > 0 ? candidates.join(' or ') : '(no desktop path on this platform)'
+      const app = this.variant?.appName ?? 'WorkBuddy'
       throw new Error(
-        `workbuddy: no signed-in WorkBuddy account found; sign in once in the WorkBuddy desktop app`
-        + ` (expected ${desktop} or WORKBUDDY_AUTH_FILE), or refresh an existing session`,
+        `workbuddy: no signed-in ${app} account found; sign in once in the ${app} desktop app`
+        + ` (expected ${desktop} or ${this.variant?.env ?? WORKBUDDY_AUTH_FILE_ENV}), or refresh an existing session`,
       )
     }
     if (!this.needsRefresh(credential)) return credential

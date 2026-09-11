@@ -5,6 +5,7 @@
  * @module dsh-workbuddy-connect/catalog
  */
 
+import { modelWithCurrentPromotion } from './upstream.ts'
 import type { WorkBuddyUpstreamModel } from './upstream.ts'
 
 /** One model entry the adapter exposes. */
@@ -49,11 +50,13 @@ export const FALLBACK_WORKBUDDY_MODELS: readonly WorkBuddyModelInfo[] = [
 
 /** Mutable catalog shared by the shim's `/v1/models` and the adapter. */
 export class WorkBuddyCatalog {
-  private models: readonly WorkBuddyModelInfo[] = FALLBACK_WORKBUDDY_MODELS
+  private models: readonly WorkBuddyModelInfo[]
+
+  constructor(initial: readonly WorkBuddyModelInfo[] = FALLBACK_WORKBUDDY_MODELS) { this.models = initial }
 
   /** Current entries; the fallback list until the upstream answer lands. */
   current(): readonly WorkBuddyModelInfo[] {
-    return this.models
+    return this.models.map(model => modelWithCurrentPromotion(model))
   }
 
   /** Replace the list; callers invalidate their adapter snapshot after this. */

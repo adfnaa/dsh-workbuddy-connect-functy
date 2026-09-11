@@ -116,6 +116,8 @@ function withRate(name: string, info: WorkBuddyModelInfo): string {
 
 /** Constructor dependencies. */
 export interface WorkBuddyAdapterOptions {
+  providerId?: string
+  displayName?: string
   shim: WorkBuddyShim
   store: WorkBuddyCredentialStore
   catalog: WorkBuddyCatalog
@@ -202,12 +204,12 @@ export function reasoningFields(
 }
 
 /** Build one pi-ai model descriptor pointing at the loopback shim. */
-function toPiModel(info: WorkBuddyModelInfo, baseUrl: string, observed?: WorkBuddyProbeRecord): Model<Api> {
+function toPiModel(info: WorkBuddyModelInfo, baseUrl: string, observed?: WorkBuddyProbeRecord, providerId = WORKBUDDY_PROVIDER): Model<Api> {
   return {
     id: info.id,
     name: info.name,
     api: 'openai-completions',
-    provider: WORKBUDDY_PROVIDER,
+    provider: providerId,
     baseUrl,
     input: info.supportsImages === true ? ['text', 'image'] : ['text'],
     ...reasoningFields(info, observed),
@@ -231,17 +233,19 @@ function toPiModel(info: WorkBuddyModelInfo, baseUrl: string, observed?: WorkBud
  */
 export function createWorkBuddyAdapter(options: WorkBuddyAdapterOptions): WorkBuddyAdapter {
   const { shim, store, catalog, resolveAttachments, observe } = options
+  const providerId = options.providerId ?? WORKBUDDY_PROVIDER
+  const displayName = options.displayName ?? 'WorkBuddy'
 
   const buildModels = (): Model<Api>[] => {
     // The OpenAI SDK pi-ai drives appends `/chat/completions` to baseURL,
     // so the shim's routes line up with the `/v1` prefix in place.
     const baseUrl = `${shim.baseUrl()}/v1`
-    return catalog.current().map(info => toPiModel(info, baseUrl, observe?.(info.id)))
+    return catalog.current().map(info => toPiModel(info, baseUrl, observe?.(info.id), providerId))
   }
 
   const base = createProvider({
-    id: WORKBUDDY_PROVIDER,
-    name: 'WorkBuddy',
+    id: providerId,
+    name: displayName,
     auth: {
       apiKey: {
         name: 'WorkBuddy OAuth bearer token',
@@ -263,8 +267,8 @@ export function createWorkBuddyAdapter(options: WorkBuddyAdapterOptions): WorkBu
   const provider: Provider = { ...base, getModels: () => buildModels() }
 
   const profile: ResolvedPiAiProviderProfile = {
-    provider: WORKBUDDY_PROVIDER,
-    displayName: 'WorkBuddy',
+    provider: providerId,
+    displayName,
     streamIdleTimeoutMs: WORKBUDDY_STREAM_IDLE_TIMEOUT_MS,
     retryPolicy: resolveRetryPolicy(undefined, 'dsh-workbuddy-connect retryPolicy'),
     configuredMaxTokens: new Map(),
@@ -275,7 +279,7 @@ export function createWorkBuddyAdapter(options: WorkBuddyAdapterOptions): WorkBu
     piProvider: provider,
   }
 
-  let profiles = new Map<string, ResolvedPiAiProviderProfile>([[WORKBUDDY_PROVIDER, profile]])
+  let profiles = new Map<string, ResolvedPiAiProviderProfile>([[providerId, profile]])
 
   const adapter = new WorkBuddyPiAiAdapter(catalog, {
     profiles: () => profiles,
@@ -291,7 +295,7 @@ export function createWorkBuddyAdapter(options: WorkBuddyAdapterOptions): WorkBu
   return {
     adapter,
     invalidate: () => {
-      profiles = new Map<string, ResolvedPiAiProviderProfile>([[WORKBUDDY_PROVIDER, profile]])
+      profiles = new Map<string, ResolvedPiAiProviderProfile>([[providerId, profile]])
     },
   }
 }
