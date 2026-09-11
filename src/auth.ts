@@ -39,6 +39,12 @@ export interface WorkBuddyAuthStatus {
   nickname?: string
   domain?: string
   source?: 'desktop' | 'dsh'
+  /**
+   * Why no credential is usable, when the reason is diagnosable rather than
+   * "nobody is signed in" — a region mismatch being the case that matters.
+   * Present only on `signed-out`, and never a substitute for fixing the file.
+   */
+  reason?: string
 }
 
 /** Constructor options; only {@link refresh} is required. */
@@ -313,16 +319,35 @@ export class WorkBuddyCredentialStore {
 
   /** Read the freshest stored credential without refreshing anything. */
   async current(): Promise<WorkBuddyCredential | undefined> {
-    let [desktop, own] = await Promise.all([this.readDesktop(), this.readOwn()])
-    for (const credential of [desktop, own]) {
-      if (credential && this.variant && regionOf(credential.domain) !== this.variant.region) {
-        throw new Error(`${this.variant.displayName}: credential belongs to another region; configure the matching provider`)
+    const [desktop, own] = await Promise.all([this.readDesktop(), this.readOwn()])
+    // A credential belonging to the other product is refused rather than used:
+    // the two apps share one auth directory and differ only by filename, so a
+    // misconfigured `authFile` / env var is a realistic mistake, and sending one
+    // region's token to the other's endpoint would leak it across products.
+    // Naming the file and the expected region is what makes it fixable.
+    if (this.variant !== undefined) {
+      for (const [label, credential] of [['desktop file', desktop], ['plugin copy', own]] as const) {
+        if (credential === undefined) continue
+        const region = regionOf(credential.domain)
+        if (region !== this.variant.region) {
+          throw new Error(
+            `${this.variant.displayName} received a ${region === 'cn' ? 'WorkBuddy (CN)' : 'WorkBuddy AI'} credential`
+            + ` in its ${label} (domain ${JSON.stringify(credential.domain)});`
+            + ` point ${this.variant.env} at the ${this.variant.appName} sign-in, or remove the mismatched file`,
+          )
+        }
       }
     }
-    // A desktop account switch takes precedence over a later-expiring old copy.
-    if (desktop && own && (desktop.uid !== own.uid || desktop.enterpriseId !== own.enterpriseId)) return desktop
     if (desktop === undefined) return own
     if (own === undefined) return desktop
+    // Identity beats expiry. The plugin's own copy is written by its own
+    // refreshes, so after the user switches accounts in the desktop app the copy
+    // still belongs to the *previous* account — and may well expire later,
+    // because the plugin refreshed it. Preferring it by expiry would send the old
+    // account's uid in `X-User-Id` and answer as the wrong user. The desktop
+    // file is the authority on who is signed in now; a differing identity means
+    // the copy is stale regardless of its timestamp.
+    if (desktop.uid !== own.uid || desktop.enterpriseId !== own.enterpriseId) return desktop
     return own.expiresAtMs > desktop.expiresAtMs ? own : desktop
   }
 
@@ -362,8 +387,13 @@ export class WorkBuddyCredentialStore {
         ...credential.domain === '' ? {} : { domain: credential.domain },
         source: credential.source,
       }
-    } catch {
-      return { state: 'signed-out' }
+    } catch (error: unknown) {
+      // A region mismatch (or an unreadable file) is a *diagnosable* signed-out
+      // state, not a silent one: the user needs the path to the file that is
+      // wrong, and which provider it actually belongs to. Reported as a status
+      // rather than thrown, because `status()` is documented never to throw and
+      // the card renders `reason` verbatim.
+      return { state: 'signed-out', reason: error instanceof Error ? error.message : String(error) }
     }
   }
 

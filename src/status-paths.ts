@@ -95,7 +95,15 @@ export interface WorkBuddyWebModelBadge {
 
 /** The JSON document the plugin card renders. */
 export type WorkBuddyWebStatus =
-  | { status: 'signed-out' }
+  | {
+    status: 'signed-out'
+    /**
+     * Why no credential is usable, when that is diagnosable rather than simply
+     * "nobody signed in" — today a credential belonging to the other product.
+     * The card renders it in place of the generic sign-in hint.
+     */
+    reason?: string
+  }
   | {
     status: 'signed-in'
     nickname?: string

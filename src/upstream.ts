@@ -632,6 +632,17 @@ export class WorkBuddyUpstreamClient {
    * assembled into an answer. `reasoning_effort` is omitted entirely (rather
    * than sent empty) when `effort` is undefined, so the baseline case is a
    * genuinely bare request.
+   *
+   * Two international differences, both measured on 2026-09-11:
+   *
+   * - The gateway requires a leading `system` message (400/11128 otherwise), so
+   *   one is prepended for the global region only.
+   * - `max_tokens: 1` is below some models' floor (the GPT-5.6 family rejects it
+   *   with 400/11133 `integer_below_min_value`), so the international probe asks
+   *   for a slightly larger minimum. This is a floor the plugin must clear, not
+   *   evidence about any model's effort support: a model still refusing that
+   *   minimum is reported as an incompatible request, never as "effort
+   *   unsupported", and the ceiling is never raised further to force an answer.
    */
   async probeEffort(
     credential: WorkBuddyCredential,
@@ -639,11 +650,15 @@ export class WorkBuddyUpstreamClient {
     effort: string | undefined,
     signal: AbortSignal,
   ): Promise<ProbeAttempt> {
+    const international = regionOf(credential.domain) === 'global'
     const payload: Record<string, unknown> = {
       model,
       stream: true,
-      messages: [...(regionOf(credential.domain) === 'global' ? [{ role: 'system', content: 'You are a helpful assistant.' }] : []), { role: 'user', content: PROBE_PROMPT }],
-      max_tokens: regionOf(credential.domain) === 'global' ? 16 : PROBE_MAX_TOKENS,
+      messages: [
+        ...international ? [{ role: 'system', content: INTERNATIONAL_SYSTEM_PROMPT }] : [],
+        { role: 'user', content: PROBE_PROMPT },
+      ],
+      max_tokens: international ? INTERNATIONAL_PROBE_MAX_TOKENS : PROBE_MAX_TOKENS,
     }
     if (effort !== undefined) payload['reasoning_effort'] = effort
 
@@ -772,42 +787,144 @@ export function parseModelCatalog(data: Record<string, unknown>, international =
     return models
 }
 
-/** Only the dated replacement-discount shape verified in the App catalog. */
+/**
+ * One verified promotion entry.
+ *
+ * Only the shape actually observed in the international App document is
+ * modelled — an enabled, time-boxed, `displayMode: "replace"` discount. An
+ * entry that does not match is dropped rather than guessed at: rendering a
+ * discount the plugin does not understand could understate what the user pays.
+ */
 export interface WorkBuddyPromotion {
+  /** Window start, epoch ms, parsed from the document's offset timestamp. */
   start: number
+  /** Window end, epoch ms. */
   end: number
+  /** Badge text as the upstream wrote it, e.g. `Free now`. */
   label: string
+  /** Multiplier applied to the model's rate; `0` replaces it outright. */
   factor: number
+  /** Higher wins when several promotions cover one model. */
   priority: number
 }
+
+/** Extract the promotions covering `model` from the `modelPromotions` array. */
 function parsePromotions(value: unknown, model: string): WorkBuddyPromotion[] {
   if (!Array.isArray(value)) return []
   return value.flatMap(item => {
-    if (!isObject(item) || item['enabled'] !== true || !Array.isArray(item['modelIds']) || !item['modelIds'].includes(model)) return []
-    const schedule = item['schedule'], discount = item['discount'], badge = item['badge']
-    if (!isObject(schedule) || !isObject(discount) || !isObject(badge) || discount['displayMode'] !== 'replace') return []
-    const start = typeof schedule['validFrom'] === 'string' ? Date.parse(schedule['validFrom']) : NaN
-    const end = typeof schedule['validUntil'] === 'string' ? Date.parse(schedule['validUntil']) : NaN
+    if (!isObject(item) || item['enabled'] !== true) return []
+    const modelIds = item['modelIds']
+    if (!Array.isArray(modelIds) || !modelIds.includes(model)) return []
+    const schedule = item['schedule']
+    const discount = item['discount']
+    const badge = item['badge']
+    if (!isObject(schedule) || !isObject(discount) || !isObject(badge)) return []
+    // Only a replacement discount has an unambiguous display rule; any other
+    // display mode is left to the upstream's own client.
+    if (discount['displayMode'] !== 'replace') return []
+    const start = typeof schedule['validFrom'] === 'string' ? Date.parse(schedule['validFrom']) : Number.NaN
+    const end = typeof schedule['validUntil'] === 'string' ? Date.parse(schedule['validUntil']) : Number.NaN
     const factor = discount['factor']
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || typeof factor !== 'number' || !Number.isFinite(factor) || factor < 0) return []
-    return [{ start, end, factor, label: typeof badge['label'] === 'string' ? badge['label'] : '', priority: typeof item['priority'] === 'number' ? item['priority'] : 0 }]
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return []
+    if (typeof factor !== 'number' || !Number.isFinite(factor) || factor < 0) return []
+    return [{
+      start,
+      end,
+      factor,
+      label: typeof badge['label'] === 'string' ? badge['label'] : '',
+      priority: typeof item['priority'] === 'number' && Number.isFinite(item['priority']) ? item['priority'] : 0,
+    }]
   })
 }
-/** Re-evaluate promotions on reads so a cached Free now label can expire. */
+
+/**
+ * Re-evaluate a model's promotion against the current time.
+ *
+ * Promotions are time-boxed, and the catalog they arrive in is cached for the
+ * life of the process. Frozen at parse time, a cached "Free now" would keep
+ * claiming a discount after `validUntil` had passed, and would keep showing the
+ * pre-discount rate as the discounted one. Re-deriving on every read means the
+ * badge disappears on its own and the rate reverts, with no refresh needed.
+ *
+ * Non-destructive: the model's own `credits` and `badges` are the base, and the
+ * promotion is layered onto a copy. A model with no live promotion is returned
+ * as-is, so the common case allocates nothing.
+ */
 export function modelWithCurrentPromotion(model: WorkBuddyUpstreamModel, now = Date.now()): WorkBuddyUpstreamModel {
-  if (!model.promotions?.length) return model
-  const promotion = [...model.promotions].sort((a, b) => b.priority - a.priority).find(p => now >= p.start && now < p.end)
-  if (!promotion) return model
+  if (model.promotions === undefined || model.promotions.length === 0) return model
+  const promotion = [...model.promotions]
+    .sort((a, b) => b.priority - a.priority)
+    .find(candidate => now >= candidate.start && now < candidate.end)
+  if (promotion === undefined) return model
   const rate = normalizeCredits(model.billing?.credits)
-  const original = rate?.startsWith('x') ? Number(rate.slice(1)) : NaN
+  const original = rate !== undefined && rate.startsWith('x') ? Number(rate.slice(1)) : Number.NaN
+  // A replacement to zero is meaningful even when the base rate is unknown (the
+  // App document's Auto row carries an empty rate string); any other multiplier
+  // needs a number to scale, so it is skipped rather than invented.
   if (promotion.factor !== 0 && !Number.isFinite(original)) return model
   const value = promotion.factor === 0 ? 0 : original * promotion.factor
-  return { ...model, billing: { ...model.billing, free: value === 0, credits: `x${value.toFixed(2)}`, badges: [...(model.billing?.badges ?? []), ...(promotion.label ? [promotion.label] : [])] } }
-}
-export function prepareInternationalChatBody(body: string): string {
-  const parsed = JSON.parse(prepareChatBody(body)) as Record<string, unknown>
-  if (Array.isArray(parsed['messages']) && (!isObject(parsed['messages'][0]) || parsed['messages'][0]['role'] !== 'system')) {
-    parsed['messages'].unshift({ role: 'system', content: 'You are a helpful assistant.' })
+  return {
+    ...model,
+    billing: {
+      ...model.billing,
+      credits: `x${value.toFixed(2)}`,
+      free: value === 0,
+      badges: [
+        ...(model.billing?.badges ?? []),
+        ...promotion.label === '' ? [] : [promotion.label],
+      ],
+    },
   }
-  return JSON.stringify(parsed)
 }
+/**
+ * Apply the international endpoint's extra chat requirement: the first message
+ * must be a system prompt.
+ *
+ * The international gateway rejects a body whose first message is not `system`
+ * with HTTP 400 code 11128 ("first message is not system prompt"). Note that
+ * the *same* code means something else on the CN endpoint — there it reports a
+ * rejected `developer` role — so the two are never branched on by code alone.
+ *
+ * The added prompt is deliberately empty of user content and prepended, never
+ * merged: existing messages keep their order and wording. A body that is not a
+ * JSON object is returned unchanged, exactly as {@link prepareChatBody} does,
+ * so this is safe to run over an already-prepared-or-not body.
+ */
+export function prepareInternationalChatBody(source: string): string {
+  const prepared = prepareChatBody(source)
+  let body: unknown
+  try {
+    body = JSON.parse(prepared)
+  } catch {
+    // Not JSON: nothing to prepend to, and the upstream will reject it anyway.
+    return prepared
+  }
+  if (!isObject(body)) return prepared
+  const messages = body['messages']
+  if (!Array.isArray(messages)) return prepared
+  const first = messages[0]
+  if (isObject(first) && first['role'] === 'system') return prepared
+  // Unshift, so every caller-supplied message keeps its position and content.
+  messages.unshift({ role: 'system', content: INTERNATIONAL_SYSTEM_PROMPT })
+  return JSON.stringify(body)
+}
+
+/**
+ * The system prompt injected when the international endpoint receives a body
+ * with none.
+ *
+ * Minimal on purpose: it exists to satisfy a gateway precondition, not to
+ * steer the model. The plugin is not the place to invent a persona, and the
+ * normal path never reaches this — pi-ai already sends the harness's system
+ * prompt, so this only covers a caller that omitted one.
+ */
+const INTERNATIONAL_SYSTEM_PROMPT = 'You are a helpful assistant.'
+
+/**
+ * Output ceiling for an international probe request.
+ *
+ * Above the smallest value that the strictest observed model accepts (the
+ * GPT-5.6 family rejects `1` with 11133), while still being far too small to
+ * produce a real answer. See {@link WorkBuddyUpstreamClient.probeEffort}.
+ */
+const INTERNATIONAL_PROBE_MAX_TOKENS = 16

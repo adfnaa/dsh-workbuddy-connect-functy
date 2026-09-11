@@ -686,7 +686,14 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
                   )}
                 </>
               : null}
-            {status.status === 'signed-out' ? <p style={bodyStyle}>{t(variant.signedOutKey)}</p> : null}
+            {status.status === 'signed-out'
+              // A mismatch explanation replaces the generic hint: telling a user
+              // to "sign in" is wrong advice when a credential was found and
+              // rejected for belonging to the other product.
+              ? <p style={status.reason === undefined ? bodyStyle : errorStyle}>
+                  {status.reason ?? t(variant.signedOutKey)}
+                </p>
+              : null}
             {status.status === 'error' ? <p style={errorStyle}>{status.message}</p> : null}
           </div>
         : null}

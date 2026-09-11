@@ -73,7 +73,15 @@ export async function workBuddyWebStatus(
   deps: WorkBuddyStatusRouteOptions,
 ): Promise<WorkBuddyWebStatus> {
   const authStatus = await deps.store.status()
-  if (authStatus.state !== 'signed-in') return { status: 'signed-out' }
+  if (authStatus.state !== 'signed-in') {
+    // A diagnosable sign-out (a credential for the *other* product) keeps its
+    // explanation: falling back to the generic hint would tell the user to sign
+    // in when the real fix is to correct a path.
+    return {
+      status: 'signed-out',
+      ...authStatus.reason === undefined ? {} : { reason: authStatus.reason },
+    }
+  }
   const status: WorkBuddyWebStatus = {
     status: 'signed-in',
     ...authStatus.nickname === undefined ? {} : { nickname: authStatus.nickname },
