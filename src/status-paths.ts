@@ -49,9 +49,35 @@ export interface WorkBuddyWebProbeSection {
 
 /** Action requested from the probe control route. */
 export interface WorkBuddyProbeAction {
-  action: 'probe' | 'clear'
+  /**
+   * `probe` spends credit on one model; `clear` drops recorded observations;
+   * `refresh` re-reads the credential and re-fetches the model catalog.
+   *
+   * All three are writes, which is why they share this route's in-process key
+   * and loopback guards rather than the read-only status GET.
+   */
+  action: 'probe' | 'clear' | 'refresh'
   /** Target model id; required for `probe`. */
   model?: string
+}
+
+/**
+ * Where the models a card is currently showing came from.
+ *
+ * The plan requires the card to distinguish a live catalog from the built-in
+ * fallback, and to say when the last attempt failed — otherwise a stale list is
+ * indistinguishable from an offline one, and a user cannot tell whether the
+ * models they see still match the upstream.
+ */
+export interface WorkBuddyWebCatalog {
+  /** `live`: the last fetch succeeded; `fallback`: the built-in roster. */
+  source: 'live' | 'fallback'
+  /** When the live catalog last succeeded, epoch ms. */
+  fetchedAt?: number
+  /** App version used as the catalog User-Agent, when the variant needed one. */
+  appVersion?: string
+  /** Why the most recent fetch failed, when it did, redacted for display. */
+  error?: string
 }
 
 /** One billing package and its remaining credit. */
@@ -126,6 +152,8 @@ export type WorkBuddyWebStatus =
     creditsError?: string
     /** Billing convenience facts for the models the plugin serves. */
     models?: readonly WorkBuddyWebModelBadge[]
+    /** Where those models came from, and whether the last fetch failed. */
+    catalog?: WorkBuddyWebCatalog
     /** Reasoning-effort probe state, consent, and recorded observations. */
     probe?: WorkBuddyWebProbeSection
     /**

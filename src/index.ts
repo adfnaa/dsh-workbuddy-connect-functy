@@ -27,7 +27,7 @@ import { WorkBuddyUpstreamClient } from './upstream.ts'
 import { registerWorkBuddyStatusRoute } from './web-status.ts'
 import { createProbeKey, registerWorkBuddyProbeRoute } from './probe-route.ts'
 import type { WorkBuddyModelInfo } from './catalog.ts'
-import type { WorkBuddyWebProbeSection } from './status-paths.ts'
+import type { WorkBuddyWebCatalog, WorkBuddyWebProbeSection } from './status-paths.ts'
 import { clearHostHeartbeat, writeHostHeartbeat } from './host-heartbeat.ts'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
 import { CN_VARIANT, WORKBUDDY_VARIANTS, type WorkBuddyVariant } from './variants.ts'
@@ -181,6 +181,10 @@ interface VariantRuntime {
   probeService: WorkBuddyProbeService
   /** The static roster this variant falls back to. */
   fallback: readonly WorkBuddyModelInfo[]
+  /** Whether the served list is the live catalog or the built-in roster. */
+  catalogSource: 'live' | 'fallback'
+  /** Why the last catalog attempt failed, when it did. */
+  catalogError: string | undefined
   /** Notify the model directory that this variant's answers changed. */
   invalidate: () => void
   /** Whether the provider registered successfully. */
@@ -237,8 +241,23 @@ function createVariantRuntime(
     probeStore,
     probeService,
     fallback,
+    catalogSource: 'fallback',
+    catalogError: undefined,
     invalidate: () => {},
     registered: false,
+  }
+}
+
+/** The catalog provenance the card displays. */
+function catalogSection(runtime: VariantRuntime): WorkBuddyWebCatalog {
+  const fetch = runtime.client.lastCatalog
+  return {
+    // A successful fetch is what makes the served list "live"; until one lands
+    // the card is showing the built-in roster and must say so.
+    source: runtime.catalogSource,
+    ...fetch === undefined ? {} : { fetchedAt: fetch.fetchedAtMs },
+    ...fetch?.appVersion === undefined ? {} : { appVersion: fetch.appVersion.version },
+    ...runtime.catalogError === undefined ? {} : { error: runtime.catalogError },
   }
 }
 
@@ -405,6 +424,7 @@ export function apply(ctx: Context, config: Config): void {
         store: runtime.store,
         client: runtime.client,
         models: () => runtime.catalog.current(),
+        catalog: () => catalogSection(runtime),
         probe: () => probeSection(runtime, current().probeConsent === true),
         probeKey,
       })
@@ -417,6 +437,25 @@ export function apply(ctx: Context, config: Config): void {
           return result
         },
         clear: () => { runtime.probeStore.clear(); runtime.invalidate() },
+        refresh: async () => {
+          // Re-read the credential first: the user pressed this because the list
+          // looks wrong, and a sign-in that happened since the last sweep is the
+          // common cause. Re-registering is unnecessary — visibility is what
+          // changes, and the sweep owns that.
+          const credential = await runtime.store.current()
+          if (credential === undefined) {
+            lastIdentities.delete(runtime.variant.id)
+            if (runtime.catalog.setVisible(false)) runtime.invalidate()
+            return { state: 'signed-out' }
+          }
+          const identity = `${credential.uid}:${credential.enterpriseId ?? ''}`
+          lastIdentities.set(runtime.variant.id, identity)
+          runtime.catalog.setVisible(true)
+          await fetchCatalog(runtime, identity)
+          return runtime.catalogError === undefined
+            ? { state: 'refreshed', reason: `${runtime.catalog.current().length} models` }
+            : { state: 'failed', reason: runtime.catalogError }
+        },
       }, probeKey)
     }
   })
@@ -448,6 +487,35 @@ export function apply(ctx: Context, config: Config): void {
     timers.length = 0
     void clearHostHeartbeat()
   })
+
+  /**
+   * Fetch one variant's catalog for the current credential.
+   *
+   * Shared by the credential sweep and the card's manual refresh. Failure is
+   * recorded rather than thrown: the previous list (or the fallback roster)
+   * keeps serving, and the card reports the reason.
+   */
+  const fetchCatalog = async (runtime: VariantRuntime, identity: string): Promise<void> => {
+    const credential = await runtime.store.current()
+    if (credential === undefined) return
+    try {
+      const models = await runtime.client.fetchModels(credential)
+      // Discard a response that arrived after the account changed: it describes
+      // the old identity and must not overwrite the new one's list.
+      if (stopped || lastIdentities.get(runtime.variant.id) !== identity) return
+      runtime.catalog.set([...models])
+      runtime.catalogSource = 'live'
+      runtime.catalogError = undefined
+      runtime.invalidate()
+    } catch (error: unknown) {
+      runtime.catalogError = error instanceof Error ? error.message.slice(0, 300) : String(error)
+      ctx.logger.warn(
+        `dsh-workbuddy-connect: ${runtime.variant.displayName} catalog unavailable; serving the fallback list`,
+        error,
+      )
+      runtime.invalidate()
+    }
+  }
 
   /**
    * Reconcile one variant with its credentials.
@@ -495,20 +563,12 @@ export function apply(ctx: Context, config: Config): void {
     // than the previous identity's models, so nothing stale is pickable while
     // the fetch is in flight.
     runtime.catalog.set(runtime.fallback)
+    runtime.catalogSource = 'fallback'
+    runtime.catalogError = undefined
     runtime.catalog.setVisible(true)
     runtime.invalidate()
 
-    try {
-      const models = await runtime.client.fetchModels(credential)
-      if (stopped || lastIdentities.get(id) !== identity) return
-      runtime.catalog.set([...models])
-      runtime.invalidate()
-    } catch (error: unknown) {
-      ctx.logger.warn(
-        `dsh-workbuddy-connect: ${runtime.variant.displayName} catalog unavailable; serving the fallback list`,
-        error,
-      )
-    }
+    await fetchCatalog(runtime, identity)
   }
 
   /** Run one reconcile sweep across both variants. */

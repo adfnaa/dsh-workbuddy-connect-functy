@@ -15,7 +15,7 @@ import { normalizeCredits } from './upstream.ts'
 import type { WorkBuddyModelInfo } from './catalog.ts'
 import { hostIsLoopback, originIsLoopback } from './loopback.ts'
 import { WORKBUDDY_STATUS_PATH } from './status-paths.ts'
-import type { WorkBuddyWebModelBadge, WorkBuddyWebProbeSection, WorkBuddyWebStatus } from './status-paths.ts'
+import type { WorkBuddyWebCatalog, WorkBuddyWebModelBadge, WorkBuddyWebProbeSection, WorkBuddyWebStatus } from './status-paths.ts'
 
 export { WORKBUDDY_STATUS_PATH } from './status-paths.ts'
 export type { WorkBuddyWebStatus } from './status-paths.ts'
@@ -31,6 +31,11 @@ export interface WorkBuddyStatusRouteOptions {
    * working on its own in tests and headless profiles.
    */
   probe?: () => WorkBuddyWebProbeSection
+  /**
+   * Origin of the currently served model list. Optional so the status route
+   * keeps working without one in tests and headless profiles.
+   */
+  catalog?: () => WorkBuddyWebCatalog | undefined
   /** In-process key authorizing probe control writes. */
   probeKey?: string
   /**
@@ -126,9 +131,14 @@ export async function workBuddyWebStatus(
           : {},
       }
     })
+  // Catalog provenance rides the document even when the model list is empty:
+  // "no models" is precisely the case a user needs explained, and it is the
+  // only way to tell a hidden group from a failed fetch.
+  const catalog = deps.catalog?.()
+  const withCatalog: WorkBuddyWebStatus = catalog === undefined ? status : { ...status, catalog }
   const statusWithModels: WorkBuddyWebStatus = modelsField.length > 0
-    ? { ...status, models: modelsField }
-    : status
+    ? { ...withCatalog, models: modelsField }
+    : withCatalog
   // Probe state rides the signed-in document so the card can render the
   // consent switches and results without a second request. The control key
   // travels with it: this response already passed the loopback guard, and the

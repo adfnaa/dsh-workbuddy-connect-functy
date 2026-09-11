@@ -39,6 +39,15 @@ export interface WorkBuddyProbeRouteOptions {
   /** Drop every recorded observation. */
   clear: () => void
   /**
+   * Re-read the credential and re-fetch the model catalog for this variant.
+   *
+   * It lives on this route rather than the status GET because it is a write
+   * that spends a request against the upstream: the read-only status route's
+   * loopback guard protects against a rebinding *page*, which is not the same
+   * as authorizing an action. Requires the same in-process key as `probe`.
+   */
+  refresh?: () => Promise<{ state: string; reason?: string }>
+  /**
    * Route path to mount. Defaults to the CN variant's path so existing callers
    * and tests keep their behaviour; the international variant passes its own.
    */
@@ -91,6 +100,9 @@ function parseAction(text: string): WorkBuddyProbeAction | undefined {
   const wrapped = parsed as Record<string, unknown>
   const action = wrapped['action']
   if (action === 'clear') return { action: 'clear' }
+  // No payload: the variant is already known from the route the request arrived
+  // on, so the browser cannot ask this route to refresh a different provider.
+  if (action === 'refresh') return { action: 'refresh' }
   if (action === 'probe') {
     const model = wrapped['model']
     if (typeof model !== 'string' || model.trim() === '') return undefined
@@ -134,6 +146,14 @@ export function workBuddyProbeHandler(
       if (action.action === 'clear') {
         deps.clear()
         json(res, 200, { state: 'cleared' })
+        return
+      }
+      if (action.action === 'refresh') {
+        if (deps.refresh === undefined) {
+          json(res, 404, { error: 'refresh-not-supported' })
+          return
+        }
+        json(res, 200, await deps.refresh())
         return
       }
       json(res, 200, await deps.probe(action.model as string))

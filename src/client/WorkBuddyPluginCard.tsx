@@ -542,6 +542,37 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
   }
 
   /**
+   * Ask the host to re-read the credential and re-fetch this variant's catalog.
+   *
+   * Shares the probe route's key and guards: it is a write that spends an
+   * upstream request, so it does not belong on the read-only status GET. A
+   * failure is surfaced through the refreshed document's `catalog.error` rather
+   * than thrown away, so the reason survives the round trip.
+   */
+  const refreshModels = useCallback(async (): Promise<void> => {
+    const key = status.status === 'signed-in' ? status.probeKey : undefined
+    if (key === undefined) return
+    setBusy(true)
+    try {
+      const response = await fetch(variant.probePath, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Probe-Key': key },
+        credentials: 'same-origin',
+        body: JSON.stringify({ action: 'refresh' }),
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    } catch (error: unknown) {
+      if (mounted.current) {
+        setStatus(previous => ({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') }))
+      }
+      return
+    } finally {
+      if (mounted.current) setBusy(false)
+    }
+    await refresh()
+  }, [refresh, status, t, variant.probePath])
+
+  /**
    * Run one control action and refresh the card's state afterwards.
    *
    * The key travels in a header, not the body: it authorizes the write, and
@@ -622,6 +653,31 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
               ? <>
                   {status.expiresAt === undefined ? null
                     : <p style={bodyStyle}>{t('accessTokenExpires', { time: formatTime(status.expiresAt) })}</p>}
+                  {/*
+                    * Catalog provenance. Without it a stale list is
+                    * indistinguishable from a fresh one, and a user cannot tell
+                    * whether what they see still matches the upstream. The
+                    * refresh action sits here because this is the line that says
+                    * whether the list needs refreshing.
+                    */}
+                  {status.catalog === undefined
+                    ? null
+                    : <div style={rowStyle}>
+                        <span style={bodyStyle}>
+                          {status.catalog.source === 'live' && status.catalog.fetchedAt !== undefined
+                            ? t('catalogLive', { time: formatTime(status.catalog.fetchedAt) })
+                            : t('catalogFallback')}
+                          {status.catalog.appVersion === undefined
+                            ? ''
+                            : ` · ${t('catalogAppVersion', { version: status.catalog.appVersion })}`}
+                        </span>
+                        <button type="button" style={buttonStyle} disabled={busy} onClick={() => { void refreshModels() }}>
+                          {busy ? t('refreshingModels') : t('refreshModels')}
+                        </button>
+                      </div>}
+                  {status.catalog?.error === undefined
+                    ? null
+                    : <p style={errorStyle}>{t('catalogError', { message: status.catalog.error })}</p>}
                   {/*
                     * Three tabs, split by what the reader came for.
                     *

@@ -73,6 +73,8 @@ interface Mounted {
 async function mount(variant: WorkBuddyVariant, options: {
   catalog: WorkBuddyCatalog
   probeKey?: string
+  /** Supply a refresh handler, as `apply()` does for a real variant. */
+  refresh?: boolean
 }): Promise<Mounted> {
   const store = new WorkBuddyCredentialStore({
     variant,
@@ -86,6 +88,7 @@ async function mount(variant: WorkBuddyVariant, options: {
     store,
     client,
     models: () => options.catalog.current(),
+    catalog: () => ({ source: 'fallback' }),
     probe: () => ({ consent: true, running: false, candidates: [], results: [] }),
     ...options.probeKey === undefined ? {} : { probeKey: options.probeKey },
   })
@@ -94,6 +97,9 @@ async function mount(variant: WorkBuddyVariant, options: {
     path: variant.probePath,
     probe: async modelId => { probes.set(modelId, (probes.get(modelId) ?? 0) + 1); return { state: 'ok' } },
     clear: () => { probes.clear() },
+    ...options.refresh === true
+      ? { refresh: async () => ({ state: 'refreshed', reason: `${options.catalog.current().length} models` }) }
+      : {},
   }, options.probeKey ?? '')
   // One server per variant, both routes on it, matching the plugin's layout.
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
@@ -113,7 +119,7 @@ async function mount(variant: WorkBuddyVariant, options: {
   return mounted
 }
 
-/** A store pointed at a written credential file, for real status documents. */describe('per-variant route mount', () => {
+describe('per-variant route mount', () => {
   it('serves each variant its own identity, credits, and models', async () => {
     const root = await mkdtemp(join(tmpdir(), 'wb-routes-'))
     CLEANUP.push(() => rm(root, { recursive: true, force: true }))
@@ -246,5 +252,51 @@ async function mount(variant: WorkBuddyVariant, options: {
     // Signed out with an explanation rather than signed in as the wrong product.
     expect(body['status']).toBe('signed-out')
     expect(String(body['reason'])).toMatch(/WORKBUDDY_AI_AUTH_FILE/)
+  })
+
+  it('reports where the served model list came from', async () => {
+    const catalog = new WorkBuddyCatalog(FALLBACK_WORKBUDDY_AI_MODELS)
+    const server = await mount(AI_VARIANT, { catalog })
+    const body = JSON.parse((await requestOnce({
+      port: server.port, method: 'GET', path: AI_VARIANT.statusPath,
+      headers: { host: `127.0.0.1:${server.port}` },
+    })).body) as Record<string, unknown>
+    // Without provenance a stale list is indistinguishable from a fresh one.
+    expect(body['catalog']).toMatchObject({ source: 'fallback' })
+  })
+
+  it('gates the refresh action behind the same in-process key as probing', async () => {
+    const catalog = new WorkBuddyCatalog(FALLBACK_WORKBUDDY_AI_MODELS)
+    const server = await mount(AI_VARIANT, { catalog, probeKey: 'key-ai', refresh: true })
+    const post = (headers: Record<string, string>) => requestOnce({
+      port: server.port, method: 'POST', path: AI_VARIANT.probePath,
+      headers: { host: `127.0.0.1:${server.port}`, 'content-type': 'application/json', ...headers },
+      body: JSON.stringify({ action: 'refresh' }),
+    })
+    // A refresh spends an upstream request, so it is a write: unauthenticated
+    // callers are refused exactly like an unauthenticated probe.
+    expect((await post({})).status).toBe(403)
+    const ok = await post({ 'x-workbuddy-probe-key': 'key-ai' })
+    expect(ok.status).toBe(200)
+    expect(JSON.parse(ok.body)).toMatchObject({ state: 'refreshed' })
+  })
+
+  it('answers 404 for refresh when the mount supplies no handler', async () => {
+    // A route without a refresh handler must say so rather than silently
+    // reporting success.
+    const server = await mount(AI_VARIANT, {
+      catalog: new WorkBuddyCatalog(FALLBACK_WORKBUDDY_AI_MODELS),
+      probeKey: 'key-ai',
+    })
+    const response = await requestOnce({
+      port: server.port, method: 'POST', path: AI_VARIANT.probePath,
+      headers: {
+        host: `127.0.0.1:${server.port}`,
+        'content-type': 'application/json',
+        'x-workbuddy-probe-key': 'key-ai',
+      },
+      body: JSON.stringify({ action: 'refresh' }),
+    })
+    expect(response.status).toBe(404)
   })
 })
