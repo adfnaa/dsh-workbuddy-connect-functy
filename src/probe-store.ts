@@ -66,9 +66,17 @@ interface ProbeDocument {
   records: Record<string, WorkBuddyProbeRecord>
 }
 
-/** Plugin-owned probe record path inside the Harness home. */
-export function workbuddyProbePath(): string {
-  return join(resolveDshHome(), WORKBUDDY_PROBE_FILENAME)
+/**
+ * Plugin-owned probe record path inside the Harness home.
+ *
+ * One file per variant. Same-named models exist on both endpoints (the
+ * international catalog repeats `glm-5.3`, `glm-5.2`, `hy3`, `kimi-k2.6`), and
+ * {@link fingerprintModel} covers only `id`/`reasoning`/`supportsImages` —
+ * never the provider — so a single shared file would let one variant's
+ * observation answer for the other. The paths differ; the format does not.
+ */
+export function workbuddyProbePath(filename: string = WORKBUDDY_PROBE_FILENAME): string {
+  return join(resolveDshHome(), filename)
 }
 
 /**

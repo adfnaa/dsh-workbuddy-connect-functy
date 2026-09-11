@@ -33,6 +33,11 @@ export interface WorkBuddyStatusRouteOptions {
   probe?: () => WorkBuddyWebProbeSection
   /** In-process key authorizing probe control writes. */
   probeKey?: string
+  /**
+   * Route path to mount. Defaults to the CN variant's path so existing callers
+   * and tests keep their behaviour; the international variant passes its own.
+   */
+  path?: string
 }
 
 /** Redact token-like content before it crosses to the browser. */
@@ -151,10 +156,11 @@ export function workBuddyStatusHandler(
 
 /** Mount the GET status route on an optional webServer context. */
 export function registerWorkBuddyStatusRoute(ctx: Context, deps: WorkBuddyStatusRouteOptions): void {
+  const path = deps.path ?? WORKBUDDY_STATUS_PATH
   ctx.effect(() => {
     const dispose = ctx.webServer.register({
       kind: 'exact',
-      path: WORKBUDDY_STATUS_PATH,
+      path,
       handler: workBuddyStatusHandler(deps),
     })
     return () => {

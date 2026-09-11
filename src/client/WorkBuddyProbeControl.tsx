@@ -23,13 +23,23 @@
 import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import type { CSSProperties } from 'react'
 import type { ModelDirectory } from '@deepseek-ai/dsh-client-ui-model-selection/client'
-import type { WorkBuddyPluginCardInjected } from './WorkBuddyPluginCard.tsx'
-import { WORKBUDDY_PROBE_PATH, WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
+import { CARD_VARIANTS, type WorkBuddyCardVariant, type WorkBuddyPluginCardInjected } from './WorkBuddyPluginCard.tsx'
 import type { WorkBuddyWebProbeModel, WorkBuddyWebStatus } from '../status-paths.ts'
 
 /** Injected props; `directory` resolves the session's current model selection. */
 export interface WorkBuddyProbeControlProps extends WorkBuddyPluginCardInjected {
   directory: ModelDirectory['store']
+}
+
+/**
+ * The card (and therefore the routes) a selected provider belongs to.
+ *
+ * The control serves both WorkBuddy providers from one seat, so the provider id
+ * is what selects the status and probe endpoints. Returning `undefined` for any
+ * other provider is what keeps the icon off every non-WorkBuddy model.
+ */
+export function cardVariantFor(provider: string): WorkBuddyCardVariant | undefined {
+  return CARD_VARIANTS.find(card => card.id === provider)
 }
 
 /** How often the control re-checks state when the window regains focus. */
@@ -219,13 +229,22 @@ export function WorkBuddyProbeControl({ directory, t }: WorkBuddyProbeControlPro
   const subscribe = useCallback((listener: () => void) => directory.subscribe(listener), [directory])
   const snapshot = useCallback(() => directory.getSnapshot(), [directory])
   const selection = useSyncExternalStore(subscribe, snapshot, snapshot).current
-  const model = selection?.provider === 'workbuddy' ? selection.model : undefined
-  const label = useLabel(t)
+  const card = selection === undefined ? undefined : cardVariantFor(selection.provider)
+  // `card` identifies both the variant and its routes: a selection under either
+  // provider resolves to exactly one card's status/probe pair, so the control
+  // can never read one variant's state while probing the other.
+  const key = card === undefined || selection === undefined ? undefined : `${card.id}:${selection.model}`
   // A new selection gets fresh state; a late response cannot target the new model.
-  return model === undefined ? null : <ModelProbe key={model} model={model} label={label} t={t} />
+  return card === undefined || selection === undefined || key === undefined
+    ? null
+    : <ModelProbe key={key} model={selection.model} card={card} label={useLabel(t)} t={t} />
 }
 
-function ModelProbe({ model, label, t }: { model: string; label: string } & WorkBuddyPluginCardInjected) {
+function ModelProbe({ model, card, label, t }: {
+  model: string
+  card: WorkBuddyCardVariant
+  label: string
+} & WorkBuddyPluginCardInjected) {
   const [status, setStatus] = useState<WorkBuddyWebStatus>()
   const [busy, setBusy] = useState(false)
   const [confirming, setConfirming] = useState(false)
@@ -239,7 +258,7 @@ function ModelProbe({ model, label, t }: { model: string; label: string } & Work
   const tooltipId = useId()
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
-    const response = await fetch(WORKBUDDY_STATUS_PATH, {
+    const response = await fetch(card.statusPath, {
       credentials: 'same-origin',
       headers: { accept: 'application/json' },
       ...(signal === undefined ? {} : { signal }),
@@ -247,7 +266,7 @@ function ModelProbe({ model, label, t }: { model: string; label: string } & Work
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     const value = await response.json() as WorkBuddyWebStatus
     if (mounted.current && !signal?.aborted) setStatus(value)
-  }, [])
+  }, [card.statusPath])
 
   useEffect(() => {
     mounted.current = true
@@ -286,7 +305,7 @@ function ModelProbe({ model, label, t }: { model: string; label: string } & Work
     setBusy(true)
     setFailed(false)
     try {
-      const response = await fetch(WORKBUDDY_PROBE_PATH, {
+      const response = await fetch(card.probePath, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Probe-Key': key },

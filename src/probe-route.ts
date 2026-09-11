@@ -38,6 +38,11 @@ export interface WorkBuddyProbeRouteOptions {
   probe: (modelId: string) => Promise<{ state: string; reason?: string }>
   /** Drop every recorded observation. */
   clear: () => void
+  /**
+   * Route path to mount. Defaults to the CN variant's path so existing callers
+   * and tests keep their behaviour; the international variant passes its own.
+   */
+  path?: string
 }
 
 /** Mint the per-process control key. */
@@ -144,10 +149,11 @@ export function registerWorkBuddyProbeRoute(
   deps: WorkBuddyProbeRouteOptions,
   key: string,
 ): void {
+  const path = deps.path ?? WORKBUDDY_PROBE_PATH
   ctx.effect(() => {
     const dispose = ctx.webServer.register({
       kind: 'exact',
-      path: WORKBUDDY_PROBE_PATH,
+      path,
       handler: workBuddyProbeHandler(deps, key),
     })
     return () => {

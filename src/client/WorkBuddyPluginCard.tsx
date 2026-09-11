@@ -4,14 +4,58 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
-import { WORKBUDDY_PROBE_PATH, WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
+import { WORKBUDDY_AI_PROBE_PATH, WORKBUDDY_AI_STATUS_PATH, WORKBUDDY_PROBE_PATH, WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
 import type { WorkBuddyWebModelBadge, WorkBuddyWebProbeSection, WorkBuddyWebStatus } from '../status-paths.ts'
 import type { WorkBuddySettingsKey } from './locales.ts'
 
 /** Localized copy injected by the browser-plugin registration. */
 export interface WorkBuddyPluginCardInjected {
   t: (key: WorkBuddySettingsKey, params?: Record<string, unknown>) => string
+  /**
+   * Which product variant this card instance renders.
+   *
+   * Both cards share this component; the variant selects the status/probe
+   * routes and the title/intro copy. Defaults to the CN variant so a card
+   * rendered without the injection keeps working.
+   */
+  variant?: WorkBuddyCardVariant
 }
+
+/** The browser-visible half of a variant: identity, routes, and copy keys. */
+export interface WorkBuddyCardVariant {
+  id: string
+  /** Locale key for the card title. */
+  titleKey: WorkBuddySettingsKey
+  /** Locale key for the card intro line. */
+  introKey: WorkBuddySettingsKey
+  /** Locale key for the not-signed-in hint. */
+  signedOutKey: WorkBuddySettingsKey
+  statusPath: string
+  probePath: string
+}
+
+/** CN WorkBuddy; the plugin's long-standing card and default. */
+export const CN_CARD_VARIANT: WorkBuddyCardVariant = {
+  id: 'workbuddy',
+  titleKey: 'title',
+  introKey: 'intro',
+  signedOutKey: 'signedOutHint',
+  statusPath: WORKBUDDY_STATUS_PATH,
+  probePath: WORKBUDDY_PROBE_PATH,
+}
+
+/** International WorkBuddy AI. */
+export const AI_CARD_VARIANT: WorkBuddyCardVariant = {
+  id: 'workbuddy-ai',
+  titleKey: 'titleAI',
+  introKey: 'introAI',
+  signedOutKey: 'signedOutHintAI',
+  statusPath: WORKBUDDY_AI_STATUS_PATH,
+  probePath: WORKBUDDY_AI_PROBE_PATH,
+}
+
+/** Both cards, in display order. */
+export const CARD_VARIANTS: readonly WorkBuddyCardVariant[] = [CN_CARD_VARIANT, AI_CARD_VARIANT]
 
 /** Props delivered by the Plugin configuration item slot. */
 export type WorkBuddyPluginCardProps =
@@ -413,7 +457,7 @@ function ProbeSection({ probe, t, onDetect, onClear, busy }: {
 }
 
 /** Render WorkBuddy sign-in state and credit as one expandable card. */
-export function WorkBuddyPluginCard({ t }: WorkBuddyPluginCardProps) {
+export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyPluginCardProps) {
   if (t === undefined) throw new Error('WorkBuddy plugin card requires its translation function')
   const [open, setOpen] = useState(false)
   const [status, setStatus] = useState<WorkBuddyWebStatus>({ status: 'signed-out' })
@@ -432,7 +476,7 @@ export function WorkBuddyPluginCard({ t }: WorkBuddyPluginCardProps) {
 
   const refresh = useCallback(async (signal?: AbortSignal): Promise<void> => {
     try {
-      const response = await fetch(WORKBUDDY_STATUS_PATH, {
+      const response = await fetch(variant.statusPath, {
         headers: { accept: 'application/json' },
         credentials: 'same-origin',
         ...signal === undefined ? {} : { signal },
@@ -445,7 +489,7 @@ export function WorkBuddyPluginCard({ t }: WorkBuddyPluginCardProps) {
         setStatus({ status: 'error', message: error instanceof Error ? error.message : t('requestFailed') })
       }
     }
-  }, [t])
+  }, [t, variant.statusPath])
 
   useEffect(() => {
     if (!open) return
@@ -485,7 +529,7 @@ export function WorkBuddyPluginCard({ t }: WorkBuddyPluginCardProps) {
     if (key === undefined) return
     setBusy(true)
     try {
-      const response = await fetch(WORKBUDDY_PROBE_PATH, {
+      const response = await fetch(variant.probePath, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Probe-Key': key },
         credentials: 'same-origin',
@@ -506,7 +550,7 @@ export function WorkBuddyPluginCard({ t }: WorkBuddyPluginCardProps) {
     } finally {
       if (mounted.current) setBusy(false)
     }
-  }, [refresh, status, t])
+  }, [refresh, status, t, variant.probePath])
 
   /**
    * Start a detection. Confirmation happens inline in the section, so this is
@@ -516,7 +560,7 @@ export function WorkBuddyPluginCard({ t }: WorkBuddyPluginCardProps) {
     void control({ action: 'probe', model: modelId })
   }, [control])
 
-  const title = t('title')
+  const title = t(variant.titleKey)
   const label = status.status === 'signed-in'
     ? status.nickname === undefined ? t('signedInAs', { nickname: '' }).replace(/[:：]\s*$/, '') : t('signedInAs', { nickname: status.nickname })
     : status.status === 'error'
@@ -534,7 +578,7 @@ export function WorkBuddyPluginCard({ t }: WorkBuddyPluginCardProps) {
       >
         <span style={headTextStyle}>
           <span style={nameStyle}>{title}</span>
-          <span style={descriptionStyle}>{t('intro')}</span>
+          <span style={descriptionStyle}>{t(variant.introKey)}</span>
         </span>
         <span aria-hidden="true" style={{ ...chevronStyle, transform: open ? 'rotate(180deg)' : 'none' }}>⌄</span>
       </button>
@@ -642,7 +686,7 @@ export function WorkBuddyPluginCard({ t }: WorkBuddyPluginCardProps) {
                   )}
                 </>
               : null}
-            {status.status === 'signed-out' ? <p style={bodyStyle}>{t('signedOutHint')}</p> : null}
+            {status.status === 'signed-out' ? <p style={bodyStyle}>{t(variant.signedOutKey)}</p> : null}
             {status.status === 'error' ? <p style={errorStyle}>{status.message}</p> : null}
           </div>
         : null}

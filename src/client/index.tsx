@@ -8,7 +8,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-model-selection/client'
 import { WorkBuddyProbeControl } from './WorkBuddyProbeControl.tsx'
-import { WorkBuddyPluginCard } from './WorkBuddyPluginCard.tsx'
+import { CARD_VARIANTS, WorkBuddyPluginCard } from './WorkBuddyPluginCard.tsx'
 import type { WorkBuddyPluginCardInjected } from './WorkBuddyPluginCard.tsx'
 import { en, zh } from './locales.ts'
 import type { WorkBuddySettingsKey } from './locales.ts'
@@ -59,12 +59,17 @@ export function apply(ctx: ClientContext): void {
     const namespace = 'settings.workbuddy'
     ctx.effect(() => ctx.locale.register(namespace, { zh, en }), 'dsh-workbuddy-connect: settings copy')
     const t = ctx.locale.bind(namespace) as WorkBuddyPluginCardInjected['t']
-    ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
-      name: 'settings.plugin.item',
-      key: 'workbuddy',
-      priority: 30,
-      inject: (): WorkBuddyPluginCardInjected => ({ t }),
-    }, WorkBuddyPluginCard))
+    // One card per variant. They show different accounts, balances, and model
+    // sets, so a single merged card could not say which account a number
+    // belongs to. The slot is key-dispatched: two keys, one component.
+    for (const [index, variant] of CARD_VARIANTS.entries()) {
+      ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
+        name: 'settings.plugin.item',
+        key: variant.id,
+        priority: 30 - index,
+        inject: (): WorkBuddyPluginCardInjected => ({ t, variant }),
+      }, WorkBuddyPluginCard))
+    }
     ctx.inject(['modelDirectories'], scope => {
       scope.slots.inject('conversation.input.right', () => scope.slots.register({
         name: 'conversation.input.right',
