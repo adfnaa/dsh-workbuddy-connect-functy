@@ -403,6 +403,16 @@ interface Envelope {
   code: number
   msg: string
   data: unknown
+  /**
+   * The whole parsed response body.
+   *
+   * Carried alongside `data` because the two catalog shapes differ: the CN
+   * endpoint always wraps (`{code,msg,data}`), while the international
+   * `/v3/config` has also been observed answering with the product document
+   * bare at the top level. `data` alone cannot express "there was no wrapper,
+   * the body itself is the answer".
+   */
+  document: Record<string, unknown>
 }
 
 async function readEnvelope(response: Response): Promise<Envelope> {
@@ -413,7 +423,7 @@ async function readEnvelope(response: Response): Promise<Envelope> {
   } catch {
     throw new Error(`workbuddy upstream returned non-JSON (http ${response.status}): ${text.slice(0, 160)}`)
   }
-  if (typeof parsed !== 'object' || parsed === null) {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
     throw new Error(`workbuddy upstream returned an unexpected document (http ${response.status})`)
   }
   const document = parsed as Record<string, unknown>
@@ -421,6 +431,7 @@ async function readEnvelope(response: Response): Promise<Envelope> {
     code: typeof document['code'] === 'number' ? document['code'] : 0,
     msg: typeof document['msg'] === 'string' ? document['msg'] : '',
     data: 'data' in document ? document['data'] : undefined,
+    document,
   }
   return envelope
 }
@@ -548,7 +559,16 @@ export class WorkBuddyUpstreamClient {
     })
     const envelope = await readEnvelope(response)
     if (!response.ok || envelope.code !== 0) throw envelopeError(response.status, envelope)
-    const data = isObject(envelope.data) ? envelope.data : {}
+    // Two catalog shapes share this path. The CN endpoint always answers with
+    // the `{code,msg,data}` wrapper; `/v3/config` has also been observed
+    // answering with the product document bare at the top level (no wrapper at
+    // all). Treating a missing `data` as an empty document turned that second
+    // shape into a spurious "no cli agent models", so a body that itself looks
+    // like a catalog (it carries models or agents) is used as the answer. A body
+    // with neither shape still falls through to the empty-parse error below.
+    const data = isObject(envelope.data) ? envelope.data
+      : 'models' in envelope.document || 'agents' in envelope.document ? envelope.document
+      : {}
     const models = parseModelCatalog(data, international)
     this.lastCatalog = {
       fetchedAtMs: Date.now(),

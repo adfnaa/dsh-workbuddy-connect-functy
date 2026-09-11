@@ -123,7 +123,7 @@ export const name = 'llm-workbuddy'
 export const inject = ['llm']
 
 /**
- * Settings namespace owning the configuration cards.
+ * Settings namespace owning the CN card's section.
  *
  * DSH 0.1.2 dropped the `settingsNamespace()` branding function: a namespace is
  * now a nominal string, validated by the type system where it is used rather
@@ -133,12 +133,21 @@ export const inject = ['llm']
  * public constant carries the seam's type without pulling the brand helper
  * into this package (upstream DSH plugins, `dsh-llm-pi-ai` included, pass
  * their namespaces as plain string literals).
- *
- * Both variants share this one namespace: it addresses a single settings
- * section, and installing a second namespace would create a second config file
- * for the same plugin with no gain.
  */
 export const WORKBUDDY_SETTINGS_NS = 'workbuddy' as SettingsNamespace
+
+/**
+ * Settings namespace owning the international card's section.
+ *
+ * One namespace per card, not one shared: the settings Plugins tab dispatches a
+ * card by rendering `settings.plugin.item` with `entryKey = ns` for each
+ * namespace the Host serves, and skips an entry whose key names no served
+ * namespace. With a single installed section, the international card registers
+ * into the slot but is never rendered — the card list is built from the Host's
+ * sections, not from the slot's entries. Each card therefore needs its own
+ * installed section whose namespace equals the card's slot key.
+ */
+export const WORKBUDDY_AI_SETTINGS_NS = 'workbuddy-ai' as SettingsNamespace
 
 /**
  * How often the credential files are re-checked, in milliseconds.
@@ -197,11 +206,37 @@ export interface Config {
   probeConsent?: boolean
 }
 
+/** Explicit CN desktop auth-file path (shared by the plugin schema and its section). */
+const AUTH_FILE_FIELD = z.string().description('WorkBuddy desktop auth file (defaults to the app\'s own location)')
+/** Explicit international desktop auth-file path (shared by the plugin schema and its section). */
+const AUTH_FILE_AI_FIELD = z.string().description('WorkBuddy AI desktop auth file (defaults to the app\'s own location)')
+/** Probe authorization (shared by the plugin schema and the CN section). */
+const PROBE_CONSENT_FIELD = z.boolean().default(false)
+  .description('Authorize reasoning-effort probes (each probe sends real requests that may consume credit)')
+
 export const Config: z<Config> = z.object({
-  authFile: z.string().description('WorkBuddy desktop auth file (defaults to the app\'s own location)'),
-  authFileAI: z.string().description('WorkBuddy AI desktop auth file (defaults to the app\'s own location)'),
-  probeConsent: z.boolean().default(false)
-    .description('Authorize reasoning-effort probes (each probe sends real requests that may consume credit)'),
+  authFile: AUTH_FILE_FIELD,
+  authFileAI: AUTH_FILE_AI_FIELD,
+  probeConsent: PROBE_CONSENT_FIELD,
+})
+
+/**
+ * The CN card's settings section: only the fields that card edits.
+ *
+ * A section is what makes its namespace "served", which is what the Plugins
+ * tab dispatches a card by — so the schema and the card must stay split the
+ * same way. `probeConsent` lives here because it predates the second variant;
+ * it gates no current code path (only manual, per-click-confirmed probes run),
+ * so it is left where existing users set it rather than moved and re-asked.
+ */
+const CN_SECTION: z<Config> = z.object({
+  authFile: AUTH_FILE_FIELD,
+  probeConsent: PROBE_CONSENT_FIELD,
+})
+
+/** The international card's settings section: only its own auth-file path. */
+const AI_SECTION: z<Config> = z.object({
+  authFileAI: AUTH_FILE_AI_FIELD,
 })
 
 /** One variant's live runtime, assembled by {@link createVariantRuntime}. */
@@ -229,6 +264,11 @@ interface VariantRuntime {
 /** Read the configured explicit auth-file path for one variant. */
 function configuredAuthFile(config: Config, variant: WorkBuddyVariant): string | undefined {
   return variant.id === CN_VARIANT.id ? config.authFile : config.authFileAI
+}
+
+/** The settings namespace a variant's card and provider directory entry use. */
+function settingsNamespaceFor(variant: WorkBuddyVariant): SettingsNamespace {
+  return variant.id === CN_VARIANT.id ? WORKBUDDY_SETTINGS_NS : WORKBUDDY_AI_SETTINGS_NS
 }
 
 /**
@@ -389,7 +429,10 @@ async function startVariant(ctx: Context, runtime: VariantRuntime): Promise<bool
       releaseDirectory = ctx.llm.registerConfigurableProviders([{
         provider: variant.id,
         displayName: variant.displayName,
-        settingsNs: WORKBUDDY_SETTINGS_NS,
+        // Each variant's directory entry joins its own installed section; the
+        // Models settings page resolves `settingsNs` against the served
+        // namespaces, so a shared ns would render both providers onto one card.
+        settingsNs: settingsNamespaceFor(variant),
         settingsPath: [],
         declared: false,
       }])
@@ -474,19 +517,46 @@ export function apply(ctx: Context, config: Config): void {
         },
         clear: () => { runtime.probeStore.clear(); runtime.invalidate() },
         refresh: async () => {
+          if (stopped) return { state: 'failed', reason: 'plugin is stopping' }
           // Re-read the credential first: the user pressed this because the list
           // looks wrong, and a sign-in that happened since the last sweep is the
           // common cause. Re-registering is unnecessary — visibility is what
           // changes, and the sweep owns that.
-          const credential = await runtime.store.current()
+          let credential
+          try {
+            credential = await runtime.store.current()
+          } catch (error: unknown) {
+            // A refused credential (wrong region, unreadable file) is a report,
+            // not a crash out of the route.
+            return {
+              state: 'failed',
+              reason: error instanceof Error ? error.message.slice(0, 300) : String(error),
+            }
+          }
           if (credential === undefined) {
             lastIdentities.delete(runtime.variant.id)
             if (runtime.catalog.setVisible(false)) runtime.invalidate()
             return { state: 'signed-out' }
           }
+          const id = runtime.variant.id
           const identity = `${credential.uid}:${credential.enterpriseId ?? ''}`
-          lastIdentities.set(runtime.variant.id, identity)
+          const known = lastIdentities.get(id)
+          if (known !== identity) {
+            // An identity switch reached through the manual path must do the
+            // same work the sweep would: the previous account's probe answers
+            // and catalog stop being served *now*, not after the fetch lands.
+            // Without this, a failed fetch for the new account left the old
+            // account's models pickable under a "live" label — and since a
+            // failed fetch never marks the source 'fallback', even the sweep's
+            // retry would not have recovered it.
+            if (known !== undefined) runtime.probeStore.clear()
+            runtime.catalog.set(runtime.fallback)
+            runtime.catalogSource = 'fallback'
+            runtime.catalogError = undefined
+          }
+          lastIdentities.set(id, identity)
           runtime.catalog.setVisible(true)
+          runtime.invalidate()
           await fetchCatalog(runtime, identity)
           return runtime.catalogError === undefined
             ? { state: 'refreshed', reason: `${runtime.catalog.current().length} models` }
@@ -496,24 +566,43 @@ export function apply(ctx: Context, config: Config): void {
     }
   })
 
-  // The settings section is what makes the provider visible on the Models
-  // settings page (settings.describe joins the provider directory), and it
-  // keeps the configured auth-file paths live across edits.
+  // Each settings section is what makes its namespace "served" — which is how
+  // both the Plugins tab (card dispatch) and the Models settings page (provider
+  // directory join) find this plugin's halves. One section per card, because the
+  // tab renders a card by `entryKey = ns` and never interprets one: a section
+  // that is not installed leaves its card registered but undispatched, and a
+  // provider whose `settingsNs` names no section joins nothing.
   //
   // DSH 0.1.2 moved the helper from a free function (`installSettingsSection`)
   // onto the provider service (`settings.installSection`), so the wiring now has
   // to wait for a settings service to exist — exactly what the inject below
   // does. Without one the plugin still serves its models; it simply has no
-  // user-editable section, as before.
+  // user-editable sections, as before.
   ctx.inject(['settings'], settingsCtx => {
-    settingsCtx.settings.installSection(ctx, WORKBUDDY_SETTINGS_NS, Config, config, {
-      setSource(source) { current = source },
-      onChange() {
-        const next = current()
-        for (const runtime of runtimes) {
-          runtime.store.setDesktopPath(configuredAuthFile(next, runtime.variant))
-        }
-      },
+    /** Section sources; each falls back to its own slice when its side unloads. */
+    const sources: { cn: () => Config, ai: () => Config } = {
+      cn: () => config,
+      ai: () => config,
+    }
+    /** Merge both sections into the whole config the rest of the plugin reads. */
+    const merged = (): Config => ({
+      ...sources.cn().authFile === undefined ? {} : { authFile: sources.cn().authFile },
+      ...sources.cn().probeConsent === undefined ? {} : { probeConsent: sources.cn().probeConsent },
+      ...sources.ai().authFileAI === undefined ? {} : { authFileAI: sources.ai().authFileAI },
+    })
+    const repointStores = (): void => {
+      const next = merged()
+      for (const runtime of runtimes) {
+        runtime.store.setDesktopPath(configuredAuthFile(next, runtime.variant))
+      }
+    }
+    settingsCtx.settings.installSection(ctx, WORKBUDDY_SETTINGS_NS, CN_SECTION, config, {
+      setSource(source) { sources.cn = source as () => Config; current = merged },
+      onChange: repointStores,
+    })
+    settingsCtx.settings.installSection(ctx, WORKBUDDY_AI_SETTINGS_NS, AI_SECTION, config, {
+      setSource(source) { sources.ai = source as () => Config; current = merged },
+      onChange: repointStores,
     })
   })
 

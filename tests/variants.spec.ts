@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WorkBuddyCredentialStore, desktopAuthCandidatesFor, parseWorkBuddyAuth } from '../src/auth.ts'
 import { FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, WorkBuddyCatalog } from '../src/catalog.ts'
 import { AI_VARIANT, CN_VARIANT, variantFor, WORKBUDDY_VARIANTS } from '../src/variants.ts'
-import { modelWithCurrentPromotion, parseModelCatalog, prepareInternationalChatBody } from '../src/upstream.ts'
+import { modelWithCurrentPromotion, parseModelCatalog, prepareInternationalChatBody, WorkBuddyUpstreamClient } from '../src/upstream.ts'
 
 /**
  * The two-variant contract. Both products share one auth directory and repeat
@@ -306,6 +306,48 @@ describe('international catalog parsing', () => {
     // successful (empty) catalog.
     expect(() => parseModelCatalog({ models: [], agents: [] }, true)).toThrow(/cli agent/)
     expect(() => parseModelCatalog({ productFeatures: {} }, true)).toThrow(/cli agent/)
+  })
+
+  it('parses a bare international document that omits the {code,msg,data} wrapper', async () => {
+    // The reviewer reproduced an international answer with NO envelope at all:
+    // the product document arrived bare at the top level. readEnvelope treats
+    // a missing `data` as `{}`, which turned that into a spurious "no cli agent
+    // models". The client must accept a bare catalog body as the answer itself.
+    const bare = JSON.stringify({
+      models: document.models,
+      agents: document.agents,
+      modelPromotions: document.modelPromotions,
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(bare),
+    } as unknown as Response)))
+    const client = new WorkBuddyUpstreamClient({
+      resolveAppVersion: async () => ({ version: '5.5.2', source: 'fallback' }),
+    })
+    const models = await client.fetchModels({
+      accessToken: 'at', refreshToken: 'rt', expiresAtMs: 0,
+      domain: 'www.workbuddy.ai', uid: 'uid', source: 'desktop',
+    })
+    expect(models.map(model => model.id)).toEqual(['hy3', 'ctx-model'])
+    vi.unstubAllGlobals()
+  })
+
+  it('still rejects a body that is neither wrapped nor a catalog', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(JSON.stringify({ unrelated: true })),
+    } as unknown as Response)))
+    const client = new WorkBuddyUpstreamClient({
+      resolveAppVersion: async () => ({ version: '5.5.2', source: 'fallback' }),
+    })
+    await expect(client.fetchModels({
+      accessToken: 'at', refreshToken: 'rt', expiresAtMs: 0,
+      domain: 'www.workbuddy.ai', uid: 'uid', source: 'desktop',
+    })).rejects.toThrow(/cli agent/)
+    vi.unstubAllGlobals()
   })
 })
 

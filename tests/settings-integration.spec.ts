@@ -144,11 +144,43 @@ describe('WorkBuddy Host settings integration', () => {
     })
 
     // Each provider carries its own display name, which is the model group
-    // heading the picker renders.
+    // heading the picker renders — and its OWN settings namespace: the Models
+    // page resolves `settingsNs` against served sections, so a shared ns would
+    // render both providers onto one card.
     expect(ctx.llm.listConfigurableProviders()).toEqual(expect.arrayContaining([
       { provider: 'workbuddy', displayName: 'WorkBuddy', settingsNs: 'workbuddy', settingsPath: [], declared: false },
-      { provider: 'workbuddy-ai', displayName: 'WorkBuddy AI', settingsNs: 'workbuddy', settingsPath: [], declared: false },
+      { provider: 'workbuddy-ai', displayName: 'WorkBuddy AI', settingsNs: 'workbuddy-ai', settingsPath: [], declared: false },
     ]))
+
+    // THE DISPATCH CONTRACT. The Plugins tab renders a card by
+    // `renderSlot('settings.plugin.item', {}, { entryKey: ns })` for each
+    // namespace the Host serves, and skips an entry whose key names no served
+    // namespace — the tab builds its list from sections, never from the slot's
+    // registrations. A card whose variant id is not a served ns therefore
+    // registers but never renders, which is exactly the bug this pins: every
+    // variant id must be an installed section's namespace.
+    const served = new Set(ctx.settings.describe().map(entry => entry.ns))
+    for (const variant of WorkBuddy.WORKBUDDY_VARIANTS) {
+      expect(served, `card key "${variant.id}" must be a served settings namespace`).toContain(variant.id)
+    }
+    expect(served).toContain(WorkBuddy.WORKBUDDY_AI_SETTINGS_NS)
+
+    // Each section owns only its own fields, so one card's form cannot edit the
+    // other's path. `describe()` reports the schema as schemastery's ref graph;
+    // the root object's `dict` is the field map.
+    const fieldsOf = (ns: string): string[] => {
+      const descriptor = ctx.settings.describe().find(entry => entry.ns === ns)
+      const root = (descriptor?.schema as { refs?: Record<string, { dict?: Record<string, unknown> }>, uid?: string } | undefined)?.refs?.[String((descriptor?.schema as { uid?: number } | undefined)?.uid)]
+      return Object.keys(root?.dict ?? {})
+    }
+    expect(fieldsOf('workbuddy')).toContain('authFile')
+    expect(fieldsOf('workbuddy')).not.toContain('authFileAI')
+    expect(fieldsOf('workbuddy-ai')).toEqual(['authFileAI'])
+
+    // A write through one section reaches only that section's store, and the
+    // merged view the plugin reads still resolves both paths.
+    await ctx.settings.update('workbuddy-ai', { authFileAI: '/tmp/ai.info' })
+    expect(fieldsOf('workbuddy')).not.toContain('authFileAI')
 
     await vi.waitFor(async () => {
       expect((await ctx.llm.listModels('workbuddy')).length).toBeGreaterThan(0)
