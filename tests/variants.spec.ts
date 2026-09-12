@@ -240,6 +240,8 @@ describe('catalog visibility and separation', () => {
     expect(ai).toHaveLength(20)
     expect(cn).toHaveLength(16)
     expect(cn).toContain('deepseek-v4.1-flash')
+    expect(cn).toContain('kimi-k2.8-preview')
+    expect(cn).not.toContain('deepseek-v4-flash')
     // International-only models must not appear in the CN roster, and vice
     // versa: the same id would otherwise carry the wrong rate and window.
     expect(ai).toContain('gpt-5.6-luna')
