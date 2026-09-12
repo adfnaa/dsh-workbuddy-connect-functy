@@ -671,7 +671,9 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
                         <span style={bodyStyle}>
                           {status.catalog.source === 'live' && status.catalog.fetchedAt !== undefined
                             ? t('catalogLive', { time: formatTime(status.catalog.fetchedAt) })
-                            : t('catalogFallback')}
+                            : status.catalog.source === 'saved' && status.catalog.fetchedAt !== undefined
+                              ? t('catalogSaved', { time: formatTime(status.catalog.fetchedAt) })
+                              : t('catalogFallback')}
                           {status.catalog.appVersion === undefined
                             ? ''
                             : ` · ${t('catalogAppVersion', { version: status.catalog.appVersion })}`}

@@ -168,4 +168,25 @@ describe('WorkBuddy plugin card', () => {
     expect(buttonLabels()).toContain(en.probeRedetect)
     expect(buttonLabels().filter(label => label === en.probeStart)).toHaveLength(1)
   })
+
+  it('distinguishes the saved catalog from a live list and the built-in fallback', async () => {
+    const fetchedAt = Date.UTC(2026, 8, 12, 8, 30)
+    status()
+    statusBody.catalog = { source: 'saved', fetchedAt }
+    await mount()
+    let rendered = JSON.stringify(view!.toJSON())
+    expect(rendered).toContain(en.catalogSaved.split('{time}')[0]!)
+    expect(rendered).not.toContain(en.catalogFallback)
+
+    status()
+    statusBody.catalog = { source: 'live', fetchedAt }
+    await act(async () => { await press(en.refresh) })
+    rendered = JSON.stringify(view!.toJSON())
+    expect(rendered).toContain(en.catalogLive.split('{time}')[0]!)
+
+    status()
+    statusBody.catalog = { source: 'fallback' }
+    await act(async () => { await press(en.refresh) })
+    expect(JSON.stringify(view!.toJSON())).toContain(en.catalogFallback)
+  })
 })
