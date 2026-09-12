@@ -14,15 +14,6 @@ Both the CN **WorkBuddy** and the international **WorkBuddy AI** apps are suppor
 
 - **CN and international side by side**: the CN app appears as the **WorkBuddy** group and the international one as **WorkBuddy AI**. Their models, accounts, and credit never mix — **each group follows only its own app's sign-in**: install just the international app and only WorkBuddy AI appears; install both and both groups appear; sign out of one and that group goes away. Settings likewise shows **one card per version**, each with its own account and balance.
 
-## WorkBuddy AI international version
-
-**WorkBuddy AI is supported from v0.5.0.** After installing and signing in to the WorkBuddy AI desktop app, DSH shows an independent **WorkBuddy AI** model group and a **DSH WorkBuddy AI Connect** settings card.
-
-- The international and CN versions use separate credentials, model catalogs, credit, and settings. They can run together without overwriting one another.
-- If only the international app is signed in, only its group is shown. Without a valid international credential, that group stays hidden so users are not offered models that will necessarily fail.
-- The international catalog is retrieved with the app's User-Agent. Its models, rates, promotions, context windows, and reasoning levels therefore follow the current catalog for that account. On refresh failure, the plugin falls back to that account's last saved catalog and then its built-in roster; the card identifies the source.
-- The international version has real-shim coverage on macOS. Windows, WSL, and Linux currently build the User-Agent from a saved or built-in app version; see [Known limitations](#known-limitations).
-
 - **Image input**: most models accept images — paste or drop one straight into the conversation (GLM-5.3-Flash, GLM-5.2, the DeepSeek-V4 series, and more); the few text-only models (e.g. GLM-5.1) clearly say so.
 
 - **Reasoning levels**: levels explicitly declared by WorkBuddy appear directly — for example, GLM-5.3 and GLM-5.3-Flash offer low / high / max. For some models that do not declare selectable levels, Web and Desktop provide a **Reasoning levels** control in the model picker for a manual check. It sends a few requests and may consume credit. Models without a check result or selectable levels continue to use WorkBuddy's default.
@@ -57,8 +48,7 @@ Prerequisite: the WorkBuddy desktop app is installed and signed in. The plugin r
 
 | Plugin | Required DSH core | Desktop app |
 |---|---|---|
-| **0.5.0** | `0.1.5-rc.1` or newer | Supports WorkBuddy and WorkBuddy AI; wait for the app's bundled core to follow |
-| **0.3.2 – 0.4.0** | `0.1.5-rc.1` or newer | WorkBuddy CN only; wait for the app's bundled core to follow |
+| **0.3.2+** | `0.1.5-rc.1` or newer | wait for the app's bundled core to follow |
 | **0.3.0 – 0.3.1** | `0.1.2-rc.1` | `2.0.5`+ recommended |
 | **0.2.6** | `0.1.1-rc.2` (older line) | `2.0.3` / `2.0.4` |
 
