@@ -18,7 +18,7 @@ export type WorkBuddyModelInfo = WorkBuddyUpstreamModel
  * registers with a usable catalog even while the first fetch is in flight or
  * offline.
  *
- * The list tracks the `cli` agent's model roster exactly: the 15 models the
+ * The list tracks the `cli` agent's model roster exactly: the 16 models the
  * desktop CLI offers. Reasoning metadata is taken verbatim from the live
  * endpoint — each model's supported effort set and whether thinking can be
  * disabled — and the `free` flag follows the upstream `x0.00` credits marker.
@@ -40,6 +40,7 @@ export const FALLBACK_WORKBUDDY_MODELS: readonly WorkBuddyModelInfo[] = [
   { id: 'kimi-k2.6', name: 'Kimi-K2.6', contextWindow: 256_000, maxTokens: 32_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, defaultEffort: 'medium', canDisableThinking: false }, billing: { credits: 'x0.52 credits', free: false } },
   { id: 'minimax-m3', name: 'MiniMax-M3', contextWindow: 512_000, maxTokens: 128_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, defaultEffort: 'medium', canDisableThinking: false }, billing: { credits: 'x0.25 credits', free: false } },
   { id: 'deepseek-v4-flash', name: 'Deepseek-V4-Flash', contextWindow: 1_000_000, maxTokens: 50_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, defaultEffort: 'high', canDisableThinking: false }, billing: { credits: 'x0.17 credits', free: false } },
+  { id: 'deepseek-v4.1-flash', name: 'Deepseek-V4.1-Flash', contextWindow: 1_000_000, maxTokens: 128_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, defaultEffort: 'high', canDisableThinking: false }, billing: { credits: 'x0.03 credits', badges: ['独家优惠'], free: false } },
   { id: 'deepseek-v4-pro', name: 'Deepseek-V4-Pro', contextWindow: 1_000_000, maxTokens: 50_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, defaultEffort: 'high', canDisableThinking: false }, billing: { credits: 'x0.51 credits', free: false } },
   // New-form reasoning rows (explicit `supportedEfforts` and `canDisableThinking`).
   { id: 'hy4-preview', name: 'Hy4 preview', contextWindow: 1_000_000, maxTokens: 64_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, supportedEfforts: ['high'], defaultEffort: 'high', canDisableThinking: false }, billing: { free: false, rateUnknown: true } },

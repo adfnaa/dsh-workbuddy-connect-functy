@@ -109,10 +109,6 @@ function withCatalogDisplay(name: string, info: WorkBuddyModelInfo): string {
   const suffix = displaySuffix(info)
   return suffix === undefined ? name : `${name}${RATE_SEPARATOR}${suffix}`
 }
-function withRate(name: string, info: WorkBuddyModelInfo): string {
-  const rate = normalizeCredits(info.billing?.credits)
-  return rate === undefined ? name : `${name}${RATE_SEPARATOR}${rate}`
-}
 
 /** Constructor dependencies. */
 export interface WorkBuddyAdapterOptions {

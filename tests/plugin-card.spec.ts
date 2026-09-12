@@ -189,4 +189,13 @@ describe('WorkBuddy plugin card', () => {
     await act(async () => { await press(en.refresh) })
     expect(JSON.stringify(view!.toJSON())).toContain(en.catalogFallback)
   })
+
+  it('does not leave whitespace after the English no-nickname label', async () => {
+    status()
+    delete statusBody.nickname
+    await mount()
+    const rendered = JSON.stringify(view!.toJSON())
+    expect(rendered).toContain('Signed in as')
+    expect(rendered).not.toContain('Signed in as ')
+  })
 })

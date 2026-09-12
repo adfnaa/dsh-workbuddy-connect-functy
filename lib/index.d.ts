@@ -143,7 +143,6 @@ interface WorkBuddyUpstreamModel {
   contextWindow: number;
   maxInputTokens?: number;
   supportedContextWindows?: readonly number[];
-  catalogSource?: string;
   promotions?: readonly WorkBuddyPromotion[];
   maxTokens: number;
   /**
@@ -578,7 +577,7 @@ type WorkBuddyModelInfo = WorkBuddyUpstreamModel;
  * registers with a usable catalog even while the first fetch is in flight or
  * offline.
  *
- * The list tracks the `cli` agent's model roster exactly: the 15 models the
+ * The list tracks the `cli` agent's model roster exactly: the 16 models the
  * desktop CLI offers. Reasoning metadata is taken verbatim from the live
  * endpoint — each model's supported effort set and whether thinking can be
  * disabled — and the `free` flag follows the upstream `x0.00` credits marker.

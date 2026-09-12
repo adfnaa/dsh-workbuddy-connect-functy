@@ -31,7 +31,6 @@ export interface WorkBuddyUpstreamModel {
   contextWindow: number
   maxInputTokens?: number
   supportedContextWindows?: readonly number[]
-  catalogSource?: string
   promotions?: readonly WorkBuddyPromotion[]
   maxTokens: number
   /**
@@ -805,7 +804,6 @@ export function parseModelCatalog(data: Record<string, unknown>, international =
           ? wrapped['contextWindow']['defaultLength'] : input,
         ...(international ? {
           maxInputTokens: input,
-          catalogSource: 'workbuddy-ai:app',
           supportedContextWindows: isObject(wrapped['contextWindow']) && Array.isArray(wrapped['contextWindow']['supportedLengths'])
             ? wrapped['contextWindow']['supportedLengths'].filter(positive) : [],
           promotions: parsePromotions(data['modelPromotions'], id),
