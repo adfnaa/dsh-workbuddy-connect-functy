@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -8,6 +8,7 @@ import LlmRuntime from '@deepseek-ai/dsh-llm'
 import SettingsProvider from '@deepseek-ai/dsh-settings'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import * as WorkBuddy from '../src/index.ts'
+import { WorkBuddyCredentialStore } from '../src/auth.ts'
 import { fingerprintModel } from '../src/probe-store.ts'
 import { FALLBACK_WORKBUDDY_MODELS } from '../src/catalog.ts'
 
@@ -399,5 +400,108 @@ describe('saved catalog', () => {
     await vi.waitFor(async () => {
       expect((await second.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['saved-model'])
     }, { timeout: 10_000 })
+  }, 45_000)
+})
+
+describe('identity changes during catalog loading', () => {
+  it('does not resurface a signed-out account roster when another account fetch fails', async () => {
+    const root = await tempDir()
+    const cnFile = join(root, 'cn.info')
+    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-a'))
+    vi.stubEnv('DSH_HOME', root)
+    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
+    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
+
+    let fail = false
+    vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init?: RequestInit) => {
+      if (fail) return fakeResponse('offline', false, 503)
+      const auth = String((init?.headers as Record<string, string> | undefined)?.['Authorization'] ?? '')
+      return fakeResponse(auth.includes('uid-b')
+        ? catalogEnvelope('account-b-model', 'B')
+        : catalogEnvelope('account-a-model', 'A'))
+    }))
+
+    const ctx = await boot()
+    await vi.waitFor(async () => {
+      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['account-a-model'])
+    })
+
+    await rm(cnFile)
+    await vi.waitFor(async () => { expect(await ctx.llm.listModels('workbuddy')).toEqual([]) })
+
+    fail = true
+    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-b'))
+    await vi.waitFor(async () => {
+      const ids = (await ctx.llm.listModels('workbuddy')).map(model => model.id)
+      expect(ids).not.toContain('account-a-model')
+      expect(ids).toContain('minimax-m3')
+    })
+  }, 45_000)
+
+  it('cancels an old-account request and starts one for the newly selected account', async () => {
+    const root = await tempDir()
+    const cnFile = join(root, 'cn.info')
+    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-a'))
+    vi.stubEnv('DSH_HOME', root)
+    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
+    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
+
+    let calls = 0
+    let aborted = false
+    vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init?: RequestInit) => {
+      calls += 1
+      if (calls === 1) {
+        return await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            aborted = true
+            reject(new Error('old account request aborted'))
+          }, { once: true })
+        })
+      }
+      return fakeResponse(catalogEnvelope('account-b-model', 'B'))
+    }))
+
+    const ctx = await boot()
+    await vi.waitFor(() => { expect(calls).toBe(1) })
+    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-b'))
+
+    await vi.waitFor(async () => {
+      expect(calls).toBe(2)
+      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['account-b-model'])
+    })
+    expect(aborted).toBe(true)
+  }, 45_000)
+
+  it('does not save a resolved credential under an identity read before it changed', async () => {
+    const root = await tempDir()
+    const cnFile = join(root, 'cn.info')
+    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-a'))
+    vi.stubEnv('DSH_HOME', root)
+    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
+    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
+    vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const auth = String((init?.headers as Record<string, string> | undefined)?.['Authorization'] ?? '')
+      return fakeResponse(auth.includes('uid-b')
+        ? catalogEnvelope('account-b-model', 'B')
+        : catalogEnvelope('account-a-model', 'A'))
+    }))
+
+    const resolve = WorkBuddyCredentialStore.prototype.resolve
+    let switched = false
+    vi.spyOn(WorkBuddyCredentialStore.prototype, 'resolve').mockImplementation(async function (this: WorkBuddyCredentialStore) {
+      if (!switched) {
+        switched = true
+        await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-b'))
+      }
+      return resolve.call(this)
+    })
+
+    const ctx = await boot()
+    await vi.waitFor(async () => {
+      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['account-b-model'])
+    })
+    const saved = JSON.parse(await readFile(join(root, '.workbuddy-catalog.json'), 'utf8')) as { entries: Record<string, unknown> }
+    expect(saved.entries['uid-a:ent-1']).toBeUndefined()
+    expect(saved.entries['uid-b:ent-1']).toBeDefined()
   }, 45_000)
 })

@@ -41,6 +41,38 @@ describe('manual probe consent and deduplication', () => {
     expect(results.map(result => result.state)).toEqual(['ok', 'ok'])
     expect(send).toHaveBeenCalledTimes(2)
   })
+  it('does not make a new account join the previous account\'s pending probe', async () => {
+    const path = mkdtempSync(join(tmpdir(), 'wb-probe-service-'))
+    paths.push(path)
+    const catalog = new WorkBuddyCatalog()
+    let account = 'uid-a:ent-1'
+    let release: (() => void) | undefined
+    let calls = 0
+    const send = vi.fn(async () => {
+      calls += 1
+      if (calls === 1) await new Promise<void>(resolve => { release = resolve })
+      return { status: 200, streamed: true }
+    })
+    const service = new WorkBuddyProbeService({
+      catalog,
+      store: new WorkBuddyProbeStore({ path: join(path, 'state.json'), pluginVersion: 'test' }),
+      credentials: { current: async () => ({}) } as unknown as WorkBuddyCredentialStore,
+      client: {} as WorkBuddyUpstreamClient,
+      consent: () => false,
+      account: () => account,
+      send: () => send,
+    })
+
+    const probeA = service.probe('glm-5.2', true)
+    await vi.waitFor(() => { expect(calls).toBe(1) })
+    account = 'uid-b:ent-1'
+    const probeB = service.probe('glm-5.2', true)
+    release?.()
+
+    await expect(probeA).resolves.toMatchObject({ state: 'unavailable', reason: 'account changed during detection' })
+    await expect(probeB).resolves.toMatchObject({ state: 'ok' })
+    expect(send).toHaveBeenCalledTimes(4)
+  })
   it('runs a fresh probe on each sequential manual confirmation', async () => {
     const { service, send } = setup()
     await service.probe('glm-5.2', true)

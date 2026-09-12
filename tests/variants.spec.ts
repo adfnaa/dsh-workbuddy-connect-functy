@@ -318,19 +318,27 @@ describe('international catalog parsing', () => {
       agents: document.agents,
       modelPromotions: document.modelPromotions,
     })
-    vi.stubGlobal('fetch', vi.fn(async () => ({
-      ok: true,
-      status: 200,
-      text: () => Promise.resolve(bare),
-    } as unknown as Response)))
+    let headers: Record<string, string> | undefined
+    const request = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      headers = init?.headers as Record<string, string> | undefined
+      return {
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(bare),
+      } as unknown as Response
+    })
+    vi.stubGlobal('fetch', request)
+    const resolver = vi.fn(async () => ({ version: '5.5.2', source: 'fallback' as const }))
     const client = new WorkBuddyUpstreamClient({
-      resolveAppVersion: async () => ({ version: '5.5.2', source: 'fallback' }),
+      resolveAppVersion: resolver,
     })
     const models = await client.fetchModels({
       accessToken: 'at', refreshToken: 'rt', expiresAtMs: 0,
       domain: 'www.workbuddy.ai', uid: 'uid', source: 'desktop',
     })
     expect(models.map(model => model.id)).toEqual(['hy3', 'ctx-model'])
+    expect(resolver).toHaveBeenCalledTimes(1)
+    expect(headers?.['User-Agent']).toBe('WorkBuddyAI/5.5.2')
     vi.unstubAllGlobals()
   })
 

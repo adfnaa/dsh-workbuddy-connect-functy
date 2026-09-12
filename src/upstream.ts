@@ -554,7 +554,7 @@ export class WorkBuddyUpstreamClient {
    * `envelopeError` — so an expired session or exhausted credit is reported as
    * such rather than as a generic catalog failure.
    */
-  async fetchModels(credential: WorkBuddyCredential): Promise<readonly WorkBuddyUpstreamModel[]> {
+  async fetchModels(credential: WorkBuddyCredential, signal?: AbortSignal): Promise<readonly WorkBuddyUpstreamModel[]> {
     const international = regionOf(credential.domain) === 'global'
     // `this.resolveAppVersion`, not the module-level function: the constructor
     // injects a resolver so tests never read the real filesystem, and calling
@@ -569,7 +569,9 @@ export class WorkBuddyUpstreamClient {
         ...international ? { 'X-Requested-With': 'XMLHttpRequest', 'X-Product': 'SaaS' } : {},
         'User-Agent': appVersion === undefined ? CLIENT_UA : appUserAgent(appVersion.version),
       },
-      signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+      signal: signal === undefined
+        ? AbortSignal.timeout(JSON_TIMEOUT_MS)
+        : AbortSignal.any([signal, AbortSignal.timeout(JSON_TIMEOUT_MS)]),
     })
     const envelope = await readEnvelope(response)
     if (!response.ok || envelope.code !== 0) throw envelopeError(response.status, envelope)

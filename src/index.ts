@@ -17,7 +17,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-attachment'
-import { WorkBuddyCredentialStore } from './auth.ts'
+import { WorkBuddyCredentialStore, type WorkBuddyCredential } from './auth.ts'
 import { FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, WorkBuddyCatalog } from './catalog.ts'
 import { workbuddyCatalogPath, WorkBuddyCatalogStore } from './catalog-store.ts'
 import { createWorkBuddyAdapter } from './adapter.ts'
@@ -285,17 +285,28 @@ interface VariantRuntime {
    */
   catalogGeneration: number
   /**
-   * The in-flight catalog fetch, if any.
-   *
-   * Concurrent callers share it rather than issuing a second request, which is
-   * what makes "one catalog request per variant at a time" (spec §5) true even
-   * when the sweep, a manual refresh, and a sign-in race each other.
+   * The in-flight catalog fetch, scoped to the identity and generation it began
+   * under. A caller may only join the same scope; an account change cancels the
+   * old request and immediately starts one for the newly adopted account.
    */
-  inflightFetch: Promise<void> | undefined
+  inflightFetch: CatalogFetch | undefined
   /** Notify the model directory that this variant's answers changed. */
   invalidate: () => void
   /** Whether the provider registered successfully. */
   registered: boolean
+}
+
+/** One catalog request plus the identity state it is allowed to update. */
+interface CatalogFetch {
+  identity: string
+  generation: number
+  controller: AbortController
+  promise: Promise<void>
+}
+
+/** Stable identity key used by credentials, probe records, and catalog entries. */
+function credentialIdentity(credential: Pick<WorkBuddyCredential, 'uid' | 'enterpriseId'>): string {
+  return `${credential.uid}:${credential.enterpriseId ?? ''}`
 }
 
 /** Read the configured explicit auth-file path for one variant. */
@@ -591,6 +602,8 @@ export function apply(ctx: Context, config: Config): void {
     else lastIdentities.set(id, identity)
     // Any change of identity invalidates in-flight work and recorded answers.
     runtime.catalogGeneration += 1
+    runtime.inflightFetch?.controller.abort()
+    runtime.inflightFetch = undefined
     if (hadCredential && known !== identity) {
       runtime.probeStore.clear()
       runtime.invalidate()
@@ -603,6 +616,10 @@ export function apply(ctx: Context, config: Config): void {
       // keeping it would only be useful if that same account returned, and the
       // file is not a place to accumulate departed accounts' catalogs.
       if (known !== undefined) runtime.savedCatalogs.delete(known)
+      runtime.catalog.set(runtime.fallback)
+      runtime.catalogSource = 'fallback'
+      runtime.catalogFetchedAtMs = undefined
+      runtime.catalogError = undefined
       if (runtime.catalog.setVisible(false)) runtime.invalidate()
       return
     }
@@ -617,7 +634,7 @@ export function apply(ctx: Context, config: Config): void {
       runtime.catalog.set([...saved.models])
       runtime.catalogSource = 'saved'
       runtime.catalogFetchedAtMs = saved.fetchedAtMs
-    } else if (hadCredential) {
+    } else {
       runtime.catalog.set(runtime.fallback)
       runtime.catalogSource = 'fallback'
       runtime.catalogFetchedAtMs = undefined
@@ -668,12 +685,12 @@ export function apply(ctx: Context, config: Config): void {
             adoptIdentity(runtime, undefined)
             return { state: 'signed-out' }
           }
-          const identity = `${credential.uid}:${credential.enterpriseId ?? ''}`
+          const identity = credentialIdentity(credential)
           // Same transition the sweep performs: a switch reached through the
           // manual path must drop the previous account's data *now*, not when
           // the fetch lands, or a failed fetch leaves those models pickable.
           adoptIdentity(runtime, identity)
-          await fetchCatalog(runtime)
+          await fetchCatalog(runtime, identity)
           return runtime.catalogError === undefined
             ? { state: 'refreshed', reason: `${runtime.catalog.current().length} models` }
             : { state: 'failed', reason: runtime.catalogError }
@@ -749,15 +766,42 @@ export function apply(ctx: Context, config: Config): void {
    *   made every catalog request fail until something else happened to refresh
    *   it, leaving the group on the fallback roster.
    */
-  const fetchCatalog = async (runtime: VariantRuntime): Promise<void> => {
+  const fetchCatalog = async (runtime: VariantRuntime, identity: string): Promise<void> => {
     const inflight = runtime.inflightFetch
-    if (inflight !== undefined) return inflight
     const generation = runtime.catalogGeneration
-    const run = (async (): Promise<void> => {
+    if (inflight !== undefined && inflight.identity === identity && inflight.generation === generation) {
+      return inflight.promise
+    }
+    // A caller should normally reach this only after `adoptIdentity()` has
+    // already cancelled a previous generation. Keep this guard local as well:
+    // no stale request may prevent the current account from fetching now.
+    inflight?.controller.abort()
+    const controller = new AbortController()
+    let run: Promise<void>
+    run = (async (): Promise<void> => {
       let models: readonly WorkBuddyModelInfo[]
       try {
         const credential = await runtime.store.resolve()
-        models = await runtime.client.fetchModels(credential)
+        const resolvedIdentity = credentialIdentity(credential)
+        // `current()` established the identity that owns this fetch, but
+        // `resolve()` reads the desktop file again. The App can switch accounts
+        // between those reads; never send or persist B's directory as A's.
+        if (resolvedIdentity !== identity) {
+          adoptIdentity(runtime, resolvedIdentity)
+          await fetchCatalog(runtime, resolvedIdentity)
+          return
+        }
+        models = await runtime.client.fetchModels(credential, controller.signal)
+        // The account can also change while the upstream request is in flight.
+        // Re-read before publishing so the just-finished document still belongs
+        // to the account that is currently selected in the desktop App.
+        const latest = await runtime.store.current()
+        const latestIdentity = latest === undefined ? undefined : credentialIdentity(latest)
+        if (latestIdentity !== identity) {
+          adoptIdentity(runtime, latestIdentity)
+          if (latestIdentity !== undefined) await fetchCatalog(runtime, latestIdentity)
+          return
+        }
       } catch (error: unknown) {
         // Report only if this attempt is still the current one; a failure from
         // a superseded attempt must not overwrite the newer state's error.
@@ -780,9 +824,8 @@ export function apply(ctx: Context, config: Config): void {
       // Remember it for this account, so a restart — or a later fetch that
       // fails — can serve what this account was actually shown rather than the
       // snapshot compiled into the plugin.
-      const account = lastIdentities.get(runtime.variant.id)
-      if (account !== undefined) {
-        runtime.savedCatalogs.set(account, {
+      if (lastIdentities.get(runtime.variant.id) === identity) {
+        runtime.savedCatalogs.set(identity, {
           source: runtime.client.lastCatalog?.source ?? 'unknown',
           fetchedAtMs: runtime.client.lastCatalog?.fetchedAtMs ?? Date.now(),
           models: [...models],
@@ -793,9 +836,9 @@ export function apply(ctx: Context, config: Config): void {
       }
       runtime.invalidate()
     })().finally(() => {
-      if (runtime.inflightFetch === run) runtime.inflightFetch = undefined
+      if (runtime.inflightFetch?.promise === run) runtime.inflightFetch = undefined
     })
-    runtime.inflightFetch = run
+    runtime.inflightFetch = { identity, generation, controller, promise: run }
     return run
   }
 
@@ -828,7 +871,7 @@ export function apply(ctx: Context, config: Config): void {
       return
     }
 
-    const identity = `${credential.uid}:${credential.enterpriseId ?? ''}`
+    const identity = credentialIdentity(credential)
     const known = lastIdentities.get(runtime.variant.id)
     if (known === identity && runtime.catalog.isVisible()) {
       // Same account, already showing something. One case still needs a fetch:
@@ -839,12 +882,12 @@ export function apply(ctx: Context, config: Config): void {
       // roster are worth replacing with a fresh fetch on the same backoff.
       const stale = runtime.catalogSource !== 'live'
       const due = Date.now() - runtime.lastFetchAtMs >= credentialPollMs() * CATALOG_RETRY_SWEEPS
-      if (stale && due) await fetchCatalog(runtime)
+      if (stale && due) await fetchCatalog(runtime, identity)
       return
     }
 
     adoptIdentity(runtime, identity)
-    await fetchCatalog(runtime)
+    await fetchCatalog(runtime, identity)
   }
 
   /** Run one reconcile sweep across both variants. */

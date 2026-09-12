@@ -100,7 +100,10 @@ export class WorkBuddyProbeService {
     }
     const info = this.options.catalog.current().find(model => model.id === modelId)
     if (info === undefined) return { state: 'unavailable', reason: `unknown model: ${modelId}` }
-    const pending = this.pending.get(modelId)
+    const account = this.options.account()
+    if (account === undefined) return { state: 'unavailable', reason: 'no WorkBuddy credential' }
+    const pendingKey = JSON.stringify([account, modelId])
+    const pending = this.pending.get(pendingKey)
     if (pending !== undefined) return pending
 
     const run = this.queue.then(async (): Promise<WorkBuddyProbeStatus> => {
@@ -124,8 +127,8 @@ export class WorkBuddyProbeService {
       // it started under (a switch, or a manual refresh, clears records while
       // the sweep is still talking to the upstream), and storing the result
       // afterwards would resurrect the previous account's answer.
-      const account = this.options.account()
-      if (account === undefined) return { state: 'unavailable', reason: 'no WorkBuddy credential' }
+      const activeAccount = this.options.account()
+      if (activeAccount !== account) return { state: 'unavailable', reason: 'account changed before detection' }
       const credential = await this.options.credentials.current()
       if (credential === undefined) return { state: 'unavailable', reason: 'no WorkBuddy credential' }
 
@@ -164,11 +167,11 @@ export class WorkBuddyProbeService {
     // Keep the chain alive regardless of this run's outcome, so one failure does
     // not poison every later probe.
     this.queue = run.catch(() => undefined)
-    this.pending.set(modelId, run)
+    this.pending.set(pendingKey, run)
     try {
       return await run
     } finally {
-      this.pending.delete(modelId)
+      this.pending.delete(pendingKey)
     }
   }
 }
