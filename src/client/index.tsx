@@ -34,7 +34,11 @@ export const name = 'dsh-workbuddy-connect-client'
  * named in the package's `dsh.client.inject` list, so cordis has activated
  * them before this plugin's fiber starts.
  */
-export const inject = ['slots', 'locale']
+// `modelDirectories` reads the active session through `remote.session`.
+// Declaring that dependency at the client entry is required by the Desktop
+// renderer; without it Cordis rejects `directoryFor()` before this bundle can
+// finish registering its contributions.
+export const inject = ['slots', 'locale', 'remote', 'remote.session']
 
 /**
  * Register card copy and the WorkBuddy card under Plugin configuration.
