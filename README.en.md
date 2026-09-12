@@ -4,7 +4,7 @@ English | [中文](./README.md)
 
 Brings every model in the WorkBuddy desktop app (GLM-5.3, GLM-5.2, DeepSeek-V4-Pro, DeepSeek-V4-Flash, Kimi-K3, MiniMax-M3, Hy3, and more) straight into [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) — zero configuration in the DSH chat.
 
-Both the CN **WorkBuddy** and the international **WorkBuddy AI** apps are supported: whichever one you have installed shows up as its own model group, and having both installed shows both, each with its own account and credit.
+Both the CN **WorkBuddy** and the international **WorkBuddy AI** apps are supported (international support since **v0.5.0**): whichever one you have installed shows up as its own model group, and having both installed shows both, each with its own account and credit.
 
 ## Features
 
@@ -12,7 +12,9 @@ Both the CN **WorkBuddy** and the international **WorkBuddy AI** apps are suppor
 
 ![WorkBuddy models in the DSH model picker](assets/1.png)
 
-- **CN and international side by side**: the CN app appears as the **WorkBuddy** group and the international one as **WorkBuddy AI**. Their models, accounts, and credit never mix — **each group follows only its own app's sign-in**: install just the international app and only WorkBuddy AI appears; install both and both groups appear; sign out of one and that group goes away. Settings likewise shows **one card per version**, each with its own account and balance.
+- **CN and international side by side**: the CN app appears as the **WorkBuddy** group and the international one as **WorkBuddy AI**. Their models, accounts, and credit never mix. **Each group follows only its own app's sign-in**: install just the international app and only WorkBuddy AI appears; install both and both groups appear; sign out of one and that group goes away. Settings likewise shows **one card per version**, each with its own account and balance.
+
+![WorkBuddy AI models in the DSH model picker](assets/5.png)
 
 - **Image input**: most models accept images — paste or drop one straight into the conversation (GLM-5.3-Flash, GLM-5.2, the DeepSeek-V4 series, and more); the few text-only models (e.g. GLM-5.1) clearly say so.
 
@@ -48,14 +50,14 @@ Prerequisite: the WorkBuddy desktop app is installed and signed in. The plugin r
 
 | Plugin | Required DSH core | Desktop app |
 |---|---|---|
-| **0.3.2+** | `0.1.5-rc.1` or newer | wait for the app's bundled core to follow |
-| **0.3.0 – 0.3.1** | `0.1.2-rc.1` | `2.0.5`+ recommended |
+| **0.3.2+** (international support since `0.5.0`) | `0.1.5-rc.1` or newer | `2.0.7`+ (bundled core `0.1.5-rc.1`) |
+| **0.3.0 – 0.3.1** | `0.1.2-rc.1` | `2.0.5` |
 | **0.2.6** | `0.1.1-rc.2` (older line) | `2.0.3` / `2.0.4` |
 
 - On DSH `0.1.5-rc.1` or newer, just install the latest: `dsh plugin --profile web add dsh-workbuddy-connect`
 - Still on DSH `0.1.2-rc.1`? Stay on `0.3.1`: `dsh plugin --profile web add dsh-workbuddy-connect@0.3.1`
 - Still on DSH `0.1.1-rc.2`? Stay on the older release: `dsh plugin --profile web add dsh-workbuddy-connect@0.2.6`
-- The desktop app (`2.0.5` today, bundled core still `0.1.2-rc.1`) should stay on `0.3.1` until its bundled core reaches `0.1.5`
+- The desktop app has bundled `0.1.5-rc.1` since `2.0.7`, so it can use `0.3.2` and newer directly; `2.0.5` and earlier apps (bundled `0.1.2-rc.1`) should stay on `0.3.1`
 
 The plugin runs under all three DSH interfaces: **Web**, **Desktop**, and **TUI**. Pick the install command that matches the profile you use.
 
