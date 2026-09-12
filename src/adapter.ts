@@ -212,6 +212,9 @@ function toPiModel(info: WorkBuddyModelInfo, baseUrl: string, observed?: WorkBud
     cost: NO_COST,
     contextWindow: info.contextWindow,
     maxTokens: info.maxTokens,
+    // pi-ai cannot infer WorkBuddy's field spelling from the shim's random
+    // loopback URL, so name the upstream-required field explicitly.
+    compat: { maxTokensField: 'max_tokens' },
   } as unknown as Model<Api>
 }
 
