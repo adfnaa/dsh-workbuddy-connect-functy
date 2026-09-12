@@ -195,6 +195,17 @@ interface WorkBuddyModelBilling {
   badges?: readonly string[];
   /** Whether the model is currently free (`x0.00` credits). */
   free: boolean;
+  /**
+   * The rate cannot be stated for this model right now.
+   *
+   * Set when a row that arrived with promotions attached has no promotion in
+   * force: the upstream bakes the discounted value into `credits`, so the
+   * cached rate describes a discount that has ended. The original price is not
+   * recoverable from the row, so the plugin reports "unknown, refresh needed"
+   * rather than repeating a figure it can no longer stand behind — in
+   * particular it never keeps claiming the model is free.
+   */
+  rateUnknown?: boolean;
 }
 /** One billing package and its remaining credit. */
 interface WorkBuddyCreditAccount {
@@ -406,6 +417,14 @@ interface WorkBuddyVariant {
   ownFilename: string;
   /** Basename of the plugin-owned probe-record file under `$DSH_HOME`. */
   probeFilename: string;
+  /**
+   * Basename of the plugin-owned saved-catalog file under `$DSH_HOME`.
+   *
+   * One per variant, like the probe records: the two endpoints disagree about
+   * rates, windows, and even which models exist for a shared id, so a catalog
+   * saved from one must never be served as the other's.
+   */
+  catalogFilename: string;
   /** Same-origin status route consumed by this variant's card. */
   statusPath: string;
   /** Same-origin probe-control route consumed by this variant's card. */
@@ -635,6 +654,17 @@ interface WorkBuddyProbeRecord {
   probedAtMs: number;
   /** Plugin version that produced the record. */
   pluginVersion: string;
+  /**
+   * The account this observation was made under, as `uid:enterpriseId`.
+   *
+   * An effort set is a fact about one account's entitlement as much as about
+   * the model: the same model id can accept different levels under a different
+   * subscription. Without this a record outlived the account that produced it,
+   * so signing out and in as someone else inherited the previous account's
+   * detected levels. Records written before this field existed carry no
+   * identity and are therefore never reused.
+   */
+  account?: string;
 }
 /**
  * Plugin-owned probe record path inside the Harness home.
@@ -682,9 +712,13 @@ declare class WorkBuddyProbeStore {
   private load;
   /**
    * The usable record for a model, or `undefined` when there is none, it is
-   * expired, or it was taken against a different catalog row.
+   * expired, it was taken against a different catalog row, or it belongs to a
+   * different account.
+   *
+   * @param account - the account in effect, as `uid:enterpriseId`. Records are
+   *   only returned for the account that produced them.
    */
-  get(modelId: string, fingerprint: string): WorkBuddyProbeRecord | undefined;
+  get(modelId: string, fingerprint: string, account: string): WorkBuddyProbeRecord | undefined;
   /**
    * Store one observation. Only a decisive answer (`validating` /
    * `non-validating`) replaces an existing decisive record: a transient
@@ -695,8 +729,8 @@ declare class WorkBuddyProbeStore {
   clear(): void;
   /** Every record currently held, for status display. */
   all(): Readonly<Record<string, WorkBuddyProbeRecord>>;
-  /** Build a record stamped with this store's clock and version. */
-  record(fingerprint: string, validation: WorkBuddyProbeValidation, efforts: readonly WorkBuddyEffort[]): WorkBuddyProbeRecord;
+  /** Build a record stamped with this store's clock, version, and account. */
+  record(fingerprint: string, validation: WorkBuddyProbeValidation, efforts: readonly WorkBuddyEffort[], account: string): WorkBuddyProbeRecord;
   /**
    * Write through a temporary file and rename, so a crash mid-write cannot
    * leave a half-parsed document that reads as "no records" and silently drops
@@ -780,6 +814,56 @@ interface WorkBuddyAdapter {
  */
 declare function createWorkBuddyAdapter(options: WorkBuddyAdapterOptions): WorkBuddyAdapter;
 //#endregion
+//#region src/catalog-store.d.ts
+/** Basename of the CN variant's saved catalog inside the Harness home. */
+declare const WORKBUDDY_CATALOG_FILENAME = ".workbuddy-catalog.json";
+/** One saved catalog: the account it belonged to, and the models it listed. */
+interface SavedCatalog {
+  /** `uid:enterpriseId` the catalog was fetched for. */
+  account: string;
+  /** Which document answered, so a CN roster is never served as an AI one. */
+  source: string;
+  /** When the fetch succeeded, epoch milliseconds. */
+  fetchedAtMs: number;
+  models: readonly WorkBuddyUpstreamModel[];
+  /** App version used as the UA, when the variant needed one. */
+  appVersion?: string;
+}
+/** Plugin-owned saved-catalog path inside the Harness home. */
+declare function workbuddyCatalogPath(filename?: string): string;
+/** Options for {@link WorkBuddyCatalogStore}. */
+interface WorkBuddyCatalogStoreOptions {
+  /** Explicit state-file path, overriding the `$DSH_HOME` default. */
+  path?: string;
+}
+/**
+ * The last successful catalog per account, read once and written atomically.
+ *
+ * Malformed content reads as "nothing saved" rather than throwing: this file
+ * is an optimization for the offline and first-seconds cases, and a corrupt one
+ * must never be able to stop the plugin from serving models.
+ */
+declare class WorkBuddyCatalogStore {
+  private readonly path;
+  private entries;
+  constructor(options?: WorkBuddyCatalogStoreOptions | string);
+  /** Resolved state-file path, for the CLI and tests. */
+  filePath(): string;
+  private load;
+  /** The saved catalog for one account, or `undefined` when there is none. */
+  get(account: string): SavedCatalog | undefined;
+  /**
+   * Remember a catalog for an account, replacing whatever was saved before.
+   *
+   * A failed write is swallowed: the plugin has already served these models,
+   * and losing the *memory* of them is not worth surfacing.
+   */
+  set(account: string, catalog: Omit<SavedCatalog, 'account'>): void;
+  /** Forget one account's catalog — used when that account signs out. */
+  delete(account: string): void;
+  private persist;
+}
+//#endregion
 //#region src/probe-service.d.ts
 /** What the caller learns about a completed probe. */
 type WorkBuddyProbeStatus = {
@@ -799,6 +883,17 @@ interface WorkBuddyProbeServiceOptions {
   client: WorkBuddyUpstreamClient;
   /** Whether probing is permitted at all; consulted before every sweep. */
   consent: () => boolean;
+  /**
+   * The account currently in effect, as `uid:enterpriseId`, or `undefined`
+   * while signed out.
+   *
+   * Records are read and written against this identity, and it is re-checked
+   * after the sweep finishes: an observation produced under account A must not
+   * be stored once account B is in effect, however long the probe took. The
+   * caller's `clear()` on an account switch is not sufficient on its own,
+   * because an in-flight probe completes *after* that clear.
+   */
+  account: () => string | undefined;
   sentinel?: SentinelFactory;
   /** Injectable for tests; defaults to the live upstream sender. */
   send?: (modelId: string) => ProbeSender;
@@ -954,4 +1049,4 @@ declare const Config: z<Config>;
  */
 declare function apply(ctx: Context, config: Config): void;
 //#endregion
-export { AI_VARIANT, type AppVersionInfo, CN_VARIANT, Config, FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, PROBE_EFFORT_CANDIDATES, type ProbeAttempt, type ProbeOutcome, type ProbeSender, type UpstreamErrorKind, WORKBUDDY_AI_SETTINGS_NS, WORKBUDDY_APP_VERSION_FILENAME, WORKBUDDY_AUTH_FILENAME, WORKBUDDY_AUTH_FILE_ENV, WORKBUDDY_HOST_HEARTBEAT_FILENAME, WORKBUDDY_PROBE_FILENAME, WORKBUDDY_PROVIDER, WORKBUDDY_SETTINGS_NS, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, WORKBUDDY_VARIANTS, type WorkBuddyAdapter, type WorkBuddyAppVersionSource, type WorkBuddyAuthStatus, WorkBuddyCatalog, type WorkBuddyCatalogFetch, type WorkBuddyChatResult, type WorkBuddyCredential, WorkBuddyCredentialStore, type WorkBuddyCredits, type WorkBuddyEffort, type WorkBuddyHostHeartbeat, type WorkBuddyModelBilling, type WorkBuddyModelInfo, type WorkBuddyModelReasoning, type WorkBuddyProbeRecord, WorkBuddyProbeService, type WorkBuddyProbeStatus, WorkBuddyProbeStore, type WorkBuddyProbeValidation, type WorkBuddyPromotion, type WorkBuddyRefreshOutcome, type WorkBuddyShim, WorkBuddyUpstreamClient, type WorkBuddyUpstreamModel, type WorkBuddyVariant, appUserAgent, apply, classifyUpstreamError, clearHostHeartbeat, createWorkBuddyAdapter, createWorkBuddyShim, defaultDesktopAuthCandidates, defaultDesktopAuthPath, desktopAuthCandidatesFor, fingerprintModel, inject, installedAppVersion, isHeartbeatProcessAlive, modelWithCurrentPromotion, name, normalizeCredits, parseModelCatalog, parseWorkBuddyAuth, prepareChatBody, prepareInternationalChatBody, probeModel, processStartTimeMs, randomSentinel, readBundleVersion, readHostHeartbeat, regionOf, resolveAppVersion, validAppVersion, variantFor, workbuddyHostHeartbeatPath, workbuddyOwnAuthPath, workbuddyProbePath };
+export { AI_VARIANT, type AppVersionInfo, CN_VARIANT, Config, FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, PROBE_EFFORT_CANDIDATES, type ProbeAttempt, type ProbeOutcome, type ProbeSender, type UpstreamErrorKind, WORKBUDDY_AI_SETTINGS_NS, WORKBUDDY_APP_VERSION_FILENAME, WORKBUDDY_AUTH_FILENAME, WORKBUDDY_AUTH_FILE_ENV, WORKBUDDY_CATALOG_FILENAME, WORKBUDDY_HOST_HEARTBEAT_FILENAME, WORKBUDDY_PROBE_FILENAME, WORKBUDDY_PROVIDER, WORKBUDDY_SETTINGS_NS, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, WORKBUDDY_VARIANTS, type WorkBuddyAdapter, type WorkBuddyAppVersionSource, type WorkBuddyAuthStatus, WorkBuddyCatalog, type WorkBuddyCatalogFetch, WorkBuddyCatalogStore, type WorkBuddyChatResult, type WorkBuddyCredential, WorkBuddyCredentialStore, type WorkBuddyCredits, type WorkBuddyEffort, type WorkBuddyHostHeartbeat, type WorkBuddyModelBilling, type WorkBuddyModelInfo, type WorkBuddyModelReasoning, type WorkBuddyProbeRecord, WorkBuddyProbeService, type WorkBuddyProbeStatus, WorkBuddyProbeStore, type WorkBuddyProbeValidation, type WorkBuddyPromotion, type WorkBuddyRefreshOutcome, type WorkBuddyShim, WorkBuddyUpstreamClient, type WorkBuddyUpstreamModel, type WorkBuddyVariant, appUserAgent, apply, classifyUpstreamError, clearHostHeartbeat, createWorkBuddyAdapter, createWorkBuddyShim, defaultDesktopAuthCandidates, defaultDesktopAuthPath, desktopAuthCandidatesFor, fingerprintModel, inject, installedAppVersion, isHeartbeatProcessAlive, modelWithCurrentPromotion, name, normalizeCredits, parseModelCatalog, parseWorkBuddyAuth, prepareChatBody, prepareInternationalChatBody, probeModel, processStartTimeMs, randomSentinel, readBundleVersion, readHostHeartbeat, regionOf, resolveAppVersion, validAppVersion, variantFor, workbuddyCatalogPath, workbuddyHostHeartbeatPath, workbuddyOwnAuthPath, workbuddyProbePath };

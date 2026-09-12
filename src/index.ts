@@ -19,6 +19,7 @@ import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-attachment'
 import { WorkBuddyCredentialStore } from './auth.ts'
 import { FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, WorkBuddyCatalog } from './catalog.ts'
+import { workbuddyCatalogPath, WorkBuddyCatalogStore } from './catalog-store.ts'
 import { createWorkBuddyAdapter } from './adapter.ts'
 import { createWorkBuddyShim } from './shim.ts'
 import { WorkBuddyProbeService } from './probe-service.ts'
@@ -40,6 +41,11 @@ export {
   WorkBuddyCatalog,
   type WorkBuddyModelInfo,
 } from './catalog.ts'
+export {
+  WORKBUDDY_CATALOG_FILENAME,
+  workbuddyCatalogPath,
+  WorkBuddyCatalogStore,
+} from './catalog-store.ts'
 export {
   fingerprintModel,
   WorkBuddyProbeStore,
@@ -247,10 +253,25 @@ interface VariantRuntime {
   catalog: WorkBuddyCatalog
   probeStore: WorkBuddyProbeStore
   probeService: WorkBuddyProbeService
+  /**
+   * The last catalogs that loaded, keyed by account.
+   *
+   * Sits between the live fetch and the built-in roster in the degradation
+   * order: a restart, or a fetch that fails while offline, serves what this
+   * account was last actually shown instead of the one-off snapshot compiled
+   * into the plugin.
+   */
+  savedCatalogs: WorkBuddyCatalogStore
   /** The static roster this variant falls back to. */
   fallback: readonly WorkBuddyModelInfo[]
-  /** Whether the served list is the live catalog or the built-in roster. */
-  catalogSource: 'live' | 'fallback'
+  /**
+   * Where the served models came from, in degradation order:
+   * `live` (fetched now) → `saved` (this account's last successful fetch) →
+   * `fallback` (the roster compiled into the plugin).
+   */
+  catalogSource: 'live' | 'saved' | 'fallback'
+  /** When the served catalog was fetched, for `live` and `saved`. */
+  catalogFetchedAtMs: number | undefined
   /** Why the last catalog attempt failed, when it did. */
   catalogError: string | undefined
   /** When the last catalog attempt started, for the retry backoff. */
@@ -324,6 +345,12 @@ function createVariantRuntime(
     pluginVersion: WORKBUDDY_CONNECT_VERSION,
     path: workbuddyProbePath(variant.probeFilename),
   })
+  // One file per variant, for the same reason the probe records are split: the
+  // two endpoints disagree about rates and windows for shared model ids, so a
+  // saved CN roster must never be served as an international one.
+  const savedCatalogs = new WorkBuddyCatalogStore(
+    workbuddyCatalogPath(variant.catalogFilename),
+  )
   const probeService = new WorkBuddyProbeService({
     store: probeStore,
     catalog,
@@ -342,8 +369,10 @@ function createVariantRuntime(
     catalog,
     probeStore,
     probeService,
+    savedCatalogs,
     fallback,
     catalogSource: 'fallback',
+    catalogFetchedAtMs: undefined,
     catalogError: undefined,
     lastFetchAtMs: 0,
     catalogGeneration: 0,
@@ -357,10 +386,13 @@ function createVariantRuntime(
 function catalogSection(runtime: VariantRuntime): WorkBuddyWebCatalog {
   const fetch = runtime.client.lastCatalog
   return {
-    // A successful fetch is what makes the served list "live"; until one lands
-    // the card is showing the built-in roster and must say so.
+    // The source is what the models on screen actually came from, so the card
+    // can distinguish a fresh fetch from a saved one from the built-in roster —
+    // "stale" and "offline" are different problems for the user.
     source: runtime.catalogSource,
-    ...fetch === undefined ? {} : { fetchedAt: fetch.fetchedAtMs },
+    // The served catalog's own fetch time, which for a saved list is when it
+    // was fetched, not when the process started.
+    ...runtime.catalogFetchedAtMs === undefined ? {} : { fetchedAt: runtime.catalogFetchedAtMs },
     ...fetch?.appVersion === undefined ? {} : { appVersion: fetch.appVersion.version },
     ...runtime.catalogError === undefined ? {} : { error: runtime.catalogError },
   }
@@ -565,17 +597,32 @@ export function apply(ctx: Context, config: Config): void {
     }
     if (identity === undefined) {
       // Signed out: hide the group, and drop the models so they are not left
-      // registered-but-invisible if visibility ever flips back.
+      // registered-but-invisible if visibility ever flips back. The signed-out
+      // account's saved catalog is forgotten as well — it is that account's
+      // data, and it is keyed by identity so nothing else can serve it, but
+      // keeping it would only be useful if that same account returned, and the
+      // file is not a place to accumulate departed accounts' catalogs.
+      if (known !== undefined) runtime.savedCatalogs.delete(known)
       if (runtime.catalog.setVisible(false)) runtime.invalidate()
       return
     }
-    // Switching: serve this variant's fallback until the new account's catalog
-    // lands, so nothing from the previous account stays pickable.
-    if (hadCredential) {
+    // Serve this account's best-known catalog until a fetch lands. The saved
+    // catalog is preferred over the built-in roster: the roster is a snapshot
+    // taken once, while the saved one is what this account (from this source)
+    // was actually served. This covers both a switch and a restart — on a
+    // restart `hadCredential` is false, and the saved catalog is exactly what
+    // stops the group from falling back to the compiled-in list.
+    const saved = runtime.savedCatalogs.get(identity)
+    if (saved !== undefined) {
+      runtime.catalog.set([...saved.models])
+      runtime.catalogSource = 'saved'
+      runtime.catalogFetchedAtMs = saved.fetchedAtMs
+    } else if (hadCredential) {
       runtime.catalog.set(runtime.fallback)
       runtime.catalogSource = 'fallback'
-      runtime.catalogError = undefined
+      runtime.catalogFetchedAtMs = undefined
     }
+    runtime.catalogError = undefined
     runtime.catalog.setVisible(true)
     runtime.invalidate()
   }
@@ -728,7 +775,22 @@ export function apply(ctx: Context, config: Config): void {
       runtime.lastFetchAtMs = Date.now()
       runtime.catalog.set([...models])
       runtime.catalogSource = 'live'
+      runtime.catalogFetchedAtMs = runtime.client.lastCatalog?.fetchedAtMs ?? Date.now()
       runtime.catalogError = undefined
+      // Remember it for this account, so a restart — or a later fetch that
+      // fails — can serve what this account was actually shown rather than the
+      // snapshot compiled into the plugin.
+      const account = lastIdentities.get(runtime.variant.id)
+      if (account !== undefined) {
+        runtime.savedCatalogs.set(account, {
+          source: runtime.client.lastCatalog?.source ?? 'unknown',
+          fetchedAtMs: runtime.client.lastCatalog?.fetchedAtMs ?? Date.now(),
+          models: [...models],
+          ...runtime.client.lastCatalog?.appVersion === undefined
+            ? {}
+            : { appVersion: runtime.client.lastCatalog.appVersion.version },
+        })
+      }
       runtime.invalidate()
     })().finally(() => {
       if (runtime.inflightFetch === run) runtime.inflightFetch = undefined
@@ -773,7 +835,9 @@ export function apply(ctx: Context, config: Config): void {
       // an earlier attempt failed, so the group is on the fallback roster and
       // nothing else will ever replace it. Retry on a slow backoff rather than
       // every sweep, so a persistent outage does not become a request loop.
-      const stale = runtime.catalogSource === 'fallback'
+      // Any non-live source is stale: both the saved catalog and the built-in
+      // roster are worth replacing with a fresh fetch on the same backoff.
+      const stale = runtime.catalogSource !== 'live'
       const due = Date.now() - runtime.lastFetchAtMs >= credentialPollMs() * CATALOG_RETRY_SWEEPS
       if (stale && due) await fetchCatalog(runtime)
       return

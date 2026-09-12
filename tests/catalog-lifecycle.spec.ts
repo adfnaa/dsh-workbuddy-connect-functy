@@ -365,3 +365,39 @@ describe('catalog lifecycle', () => {
     })
   }, 45_000)
 })
+
+/**
+ * The saved catalog sits between a live fetch and the built-in roster in the
+ * plan's degradation order (§4). Without it a restart always dropped the user
+ * to the compiled-in snapshot, even when a good catalog had been fetched
+ * moments earlier — which the plan and the README both promise not to happen.
+ */
+describe('saved catalog', () => {
+  it('restores the last successful catalog for the account on a restart with no network', async () => {
+    const root = await tempDir()
+    const cnFile = join(root, 'cn.info')
+    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-1'))
+    vi.stubEnv('DSH_HOME', root)
+    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
+    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
+    vi.stubEnv('DSH_WORKBUDDY_POLL_MS', '100')
+
+    // First run: online, so a live catalog lands and is remembered.
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(catalogEnvelope('saved-model', 'Saved'))))
+    const first = await boot()
+    await vi.waitFor(async () => {
+      expect((await first.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['saved-model'])
+    }, { timeout: 10_000 })
+    // Let the write land before the process is torn down.
+    await new Promise(resolve => setTimeout(resolve, 300))
+    await first.fiber.dispose()
+    context = undefined
+
+    // Second run: offline. The saved catalog must serve, not the built-in roster.
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline') }))
+    const second = await boot()
+    await vi.waitFor(async () => {
+      expect((await second.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['saved-model'])
+    }, { timeout: 10_000 })
+  }, 45_000)
+})

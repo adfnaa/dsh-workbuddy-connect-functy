@@ -36,6 +36,14 @@ export interface WorkBuddyVariant {
   ownFilename: string
   /** Basename of the plugin-owned probe-record file under `$DSH_HOME`. */
   probeFilename: string
+  /**
+   * Basename of the plugin-owned saved-catalog file under `$DSH_HOME`.
+   *
+   * One per variant, like the probe records: the two endpoints disagree about
+   * rates, windows, and even which models exist for a shared id, so a catalog
+   * saved from one must never be served as the other's.
+   */
+  catalogFilename: string
   /** Same-origin status route consumed by this variant's card. */
   statusPath: string
   /** Same-origin probe-control route consumed by this variant's card. */
@@ -53,6 +61,7 @@ export const WORKBUDDY_VARIANTS: readonly WorkBuddyVariant[] = [
     desktopFilename: 'workbuddy-desktop.info',
     ownFilename: '.workbuddy-auth.json',
     probeFilename: '.workbuddy-probe.json',
+    catalogFilename: '.workbuddy-catalog.json',
     statusPath: WORKBUDDY_STATUS_PATH,
     probePath: WORKBUDDY_PROBE_PATH,
   },
@@ -65,6 +74,7 @@ export const WORKBUDDY_VARIANTS: readonly WorkBuddyVariant[] = [
     desktopFilename: 'workbuddy-desktop-ai.info',
     ownFilename: '.workbuddy-ai-auth.json',
     probeFilename: '.workbuddy-ai-probe.json',
+    catalogFilename: '.workbuddy-ai-catalog.json',
     statusPath: WORKBUDDY_AI_STATUS_PATH,
     probePath: WORKBUDDY_AI_PROBE_PATH,
   },

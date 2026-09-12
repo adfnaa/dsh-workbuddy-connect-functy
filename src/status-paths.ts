@@ -70,8 +70,14 @@ export interface WorkBuddyProbeAction {
  * models they see still match the upstream.
  */
 export interface WorkBuddyWebCatalog {
-  /** `live`: the last fetch succeeded; `fallback`: the built-in roster. */
-  source: 'live' | 'fallback'
+  /**
+   * Where the models on screen came from, in degradation order:
+   * `live` (fetched now) → `saved` (this account's last successful fetch,
+   * restored after a restart or a failed fetch) → `fallback` (the roster
+   * compiled into the plugin). The card distinguishes them because "stale" and
+   * "offline with a saved list" are different situations for the user.
+   */
+  source: 'live' | 'saved' | 'fallback'
   /** When the live catalog last succeeded, epoch ms. */
   fetchedAt?: number
   /** App version used as the catalog User-Agent, when the variant needed one. */
