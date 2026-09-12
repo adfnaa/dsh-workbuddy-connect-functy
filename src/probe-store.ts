@@ -59,6 +59,17 @@ export interface WorkBuddyProbeRecord {
   probedAtMs: number
   /** Plugin version that produced the record. */
   pluginVersion: string
+  /**
+   * The account this observation was made under, as `uid:enterpriseId`.
+   *
+   * An effort set is a fact about one account's entitlement as much as about
+   * the model: the same model id can accept different levels under a different
+   * subscription. Without this a record outlived the account that produced it,
+   * so signing out and in as someone else inherited the previous account's
+   * detected levels. Records written before this field existed carry no
+   * identity and are therefore never reused.
+   */
+  account?: string
 }
 
 interface ProbeDocument {
@@ -181,12 +192,19 @@ export class WorkBuddyProbeStore {
 
   /**
    * The usable record for a model, or `undefined` when there is none, it is
-   * expired, or it was taken against a different catalog row.
+   * expired, it was taken against a different catalog row, or it belongs to a
+   * different account.
+   *
+   * @param account - the account in effect, as `uid:enterpriseId`. Records are
+   *   only returned for the account that produced them.
    */
-  get(modelId: string, fingerprint: string): WorkBuddyProbeRecord | undefined {
+  get(modelId: string, fingerprint: string, account: string): WorkBuddyProbeRecord | undefined {
     const record = this.load()[modelId]
     if (record === undefined) return undefined
     if (record.fingerprint !== fingerprint) return undefined
+    // A record with no identity is one written before account binding existed;
+    // it cannot be attributed, so it is not reused.
+    if (record.account !== account) return undefined
     if (this.now() - record.probedAtMs > this.ttlMs) return undefined
     return record
   }
@@ -222,8 +240,13 @@ export class WorkBuddyProbeStore {
     return { ...this.load() }
   }
 
-  /** Build a record stamped with this store's clock and version. */
-  record(fingerprint: string, validation: WorkBuddyProbeValidation, efforts: readonly WorkBuddyEffort[]): WorkBuddyProbeRecord {
+  /** Build a record stamped with this store's clock, version, and account. */
+  record(
+    fingerprint: string,
+    validation: WorkBuddyProbeValidation,
+    efforts: readonly WorkBuddyEffort[],
+    account: string,
+  ): WorkBuddyProbeRecord {
     return {
       fingerprint,
       validation,
@@ -232,6 +255,7 @@ export class WorkBuddyProbeStore {
       efforts: validation === 'validating' ? [...efforts] : [],
       probedAtMs: this.now(),
       pluginVersion: this.pluginVersion,
+      account,
     }
   }
 

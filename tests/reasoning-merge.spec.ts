@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -28,9 +28,28 @@ const CLEANUP: string[] = []
 afterEach(async () => {
   for (const path of CLEANUP.splice(0)) await rm(path, { recursive: true, force: true })
   vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
 })
 
-/** Write a probe record for `model` before the plugin boots, then start it. */
+/** The account these fixtures sign in as; records must carry the same value. */
+const ACCOUNT = 'uid-1:ent-1'
+
+/** A CN desktop-shaped credential document, so the variant is signed in. */
+function credentialDocument(): string {
+  return JSON.stringify({
+    auth: { accessToken: 'at', refreshToken: 'rt', expiresAt: Date.now() + 3_600_000, domain: 'copilot.tencent.com' },
+    account: { uid: 'uid-1', nickname: 'nick', enterpriseId: 'ent-1' },
+  })
+}
+
+/**
+ * Write a probe record for `model` before the plugin boots, then start it.
+ *
+ * A signed-in credential is required, not incidental: observations are bound to
+ * the account that produced them, so a record with no account in effect is (by
+ * design) never served. Signing in here is what makes the cases below exercise
+ * the merge rather than the account check.
+ */
 async function boot(options: {
   model?: WorkBuddyModelInfo['id']
   record?: (fingerprint: string) => WorkBuddyProbeRecord
@@ -38,6 +57,13 @@ async function boot(options: {
   const root = await mkdtemp(join(tmpdir(), 'dsh-wb-probe-'))
   CLEANUP.push(root)
   vi.stubEnv('DSH_HOME', root)
+  const cnFile = join(root, 'cn.info')
+  await writeFile(cnFile, credentialDocument())
+  vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
+  vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent-ai.info'))
+  // Offline: these cases key off the fallback roster, and a real fetch would
+  // replace it with whatever the live catalog happens to say today.
+  vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline in tests') }))
 
   if (options.record !== undefined && options.model !== undefined) {
     const info = WorkBuddy.FALLBACK_WORKBUDDY_MODELS.find(model => model.id === options.model)
@@ -78,6 +104,7 @@ describe('probe results merged into the provider', () => {
         efforts: ['low', 'high'],
         probedAtMs: Date.now(),
         pluginVersion: 'test',
+        account: ACCOUNT,
       }),
     })
     const efforts = await effortsFor(ctx, 'auto')
@@ -97,6 +124,7 @@ describe('probe results merged into the provider', () => {
         efforts: [],
         probedAtMs: Date.now(),
         pluginVersion: 'test',
+        account: ACCOUNT,
       }),
     })
     expect(await effortsFor(ctx, 'auto')).toBeUndefined()
@@ -114,6 +142,7 @@ describe('probe results merged into the provider', () => {
         efforts: ['max'],
         probedAtMs: Date.now(),
         pluginVersion: 'test',
+        account: ACCOUNT,
       }),
     })
     // Assert against the declaration actually in force rather than a hardcoded
@@ -141,6 +170,7 @@ describe('probe results merged into the provider', () => {
         efforts: ['low', 'high'],
         probedAtMs: Date.now(),
         pluginVersion: 'test',
+        account: ACCOUNT,
       }),
     })
     expect(await effortsFor(ctx, 'auto')).toBeUndefined()

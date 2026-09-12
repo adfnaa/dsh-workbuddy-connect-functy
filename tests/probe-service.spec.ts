@@ -22,6 +22,7 @@ describe('manual probe consent and deduplication', () => {
       credentials: { current: async () => ({}) } as unknown as WorkBuddyCredentialStore,
       client: {} as WorkBuddyUpstreamClient,
       consent: () => consent,
+      account: () => 'uid-1:ent-1',
       send: () => send,
     })
     return { service, send }

@@ -119,6 +119,11 @@ export async function workBuddyWebStatus(
         ...model.billing?.free === true ? { free: true as const } : {},
         ...model.billing?.badges !== undefined && model.billing.badges.length > 0 ? { badges: model.billing.badges } : {},
         ...rate === undefined ? {} : { credits: rate },
+        // The rate is deliberately withheld for a row whose price cannot be
+        // vouched for (a promotion that has ended but is still baked into the
+        // cached row): the card then says the price needs a refresh instead of
+        // repeating a stale figure or implying the model is free.
+        ...model.billing?.rateUnknown === true ? { rateUnknown: true as const } : {},
         // Verbatim from the upstream catalog; omitted when it said nothing.
         ...typeof model.contextWindow === 'number' && model.contextWindow > 0
           ? { contextWindow: model.contextWindow }

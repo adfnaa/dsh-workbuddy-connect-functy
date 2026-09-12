@@ -265,7 +265,12 @@ function ModelOfferRow({ model, t }: {
           {model.free === true ? <span style={modelBadgeChipStyle}>{t('freeModel')}</span> : null}
         </span>
       </div>
-      {model.credits === undefined ? null : <span style={modelRateStyle}>{t('rate', { rate: model.credits })}</span>}
+      {model.credits === undefined
+        // No rate to show. When the plugin withheld it because the price came
+        // from an ended promotion, say so plainly rather than showing nothing —
+        // silence here reads as "free", which is the claim being avoided.
+        ? model.rateUnknown === true ? <span style={modelRateStyle}>{t('rateUnknown')}</span> : null
+        : <span style={modelRateStyle}>{t('rate', { rate: model.credits })}</span>}
     </div>
   )
 }

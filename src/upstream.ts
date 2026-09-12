@@ -86,6 +86,17 @@ export interface WorkBuddyModelBilling {
   badges?: readonly string[]
   /** Whether the model is currently free (`x0.00` credits). */
   free: boolean
+  /**
+   * The rate cannot be stated for this model right now.
+   *
+   * Set when a row that arrived with promotions attached has no promotion in
+   * force: the upstream bakes the discounted value into `credits`, so the
+   * cached rate describes a discount that has ended. The original price is not
+   * recoverable from the row, so the plugin reports "unknown, refresh needed"
+   * rather than repeating a figure it can no longer stand behind — in
+   * particular it never keeps claiming the model is free.
+   */
+  rateUnknown?: boolean
 }
 
 /** One billing package and its remaining credit. */
@@ -545,7 +556,10 @@ export class WorkBuddyUpstreamClient {
    */
   async fetchModels(credential: WorkBuddyCredential): Promise<readonly WorkBuddyUpstreamModel[]> {
     const international = regionOf(credential.domain) === 'global'
-    const appVersion = international ? await resolveAppVersion() : undefined
+    // `this.resolveAppVersion`, not the module-level function: the constructor
+    // injects a resolver so tests never read the real filesystem, and calling
+    // the module function directly made that seam inert.
+    const appVersion = international ? await this.resolveAppVersion() : undefined
     const response = await fetch(`${chatBase(credential)}${international ? '/v3/config' : '/console/enterprises/personal/models'}`, {
       headers: {
         Authorization: `Bearer ${credential.accessToken}`,
@@ -875,7 +889,31 @@ export function modelWithCurrentPromotion(model: WorkBuddyUpstreamModel, now = D
   const promotion = [...model.promotions]
     .sort((a, b) => b.priority - a.priority)
     .find(candidate => now >= candidate.start && now < candidate.end)
-  if (promotion === undefined) return model
+  if (promotion === undefined) {
+    // This row arrives with promotions attached, but none is in force now. The
+    // catalog is cached for the process's life, so the rate baked into the row
+    // was read while a promotion *was* active — the upstream writes the
+    // discounted value into `credits` itself (the international document's
+    // free models ship `credits: "x0.00"`). Keeping that value would advertise
+    // a discount that has ended, and `free: true` is the worst case of it: the
+    // user would be told a model costs nothing when it does not.
+    //
+    // The original price is not recoverable from this row, so the honest answer
+    // is to stop asserting one: the rate is dropped and any promo badge
+    // removed. `rateUnknown` marks it so the card can say the price needs a
+    // refresh rather than implying the model is free.
+    const derivedFromPromotion = model.billing?.free === true
+      || (model.billing?.badges?.length ?? 0) > 0
+      || model.promotions.some(candidate => candidate.factor !== 1)
+    if (!derivedFromPromotion) return model
+    return {
+      ...model,
+      billing: {
+        free: false,
+        rateUnknown: true,
+      },
+    }
+  }
   const rate = normalizeCredits(model.billing?.credits)
   const original = rate !== undefined && rate.startsWith('x') ? Number(rate.slice(1)) : Number.NaN
   // A replacement to zero is meaningful even when the base rate is unknown (the

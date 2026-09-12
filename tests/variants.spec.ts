@@ -373,17 +373,42 @@ describe('promotion lifetime', () => {
     expect(model.billing).toEqual({ credits: 'x0.00', free: true, badges: ['Free now'] })
   })
 
-  it('reverts once the window has closed', () => {
-    // The catalog is cached for the process's life; deriving on read is what
-    // keeps a cached "Free now" from outliving the offer it described.
+  it('withholds the rate once the window has closed', () => {
+    // The catalog is cached for the process's life, and the upstream bakes the
+    // DISCOUNTED value into the row's own `credits` field — so once the window
+    // closes, neither the cached figure nor `free` can be repeated. The original
+    // price is not recoverable from the row, so the honest answer is "unknown,
+    // refresh": reverting to the cached `x0.50` would state a price that was
+    // never the real one, and keeping `free` would advertise the ended offer.
     const model = modelWithCurrentPromotion(base, Date.parse('2026-10-01T00:00:00+08:00'))
-    expect(model.billing).toEqual({ credits: 'x0.50', free: false })
+    expect(model.billing).toEqual({ free: false, rateUnknown: true })
+    expect(model.billing?.credits).toBeUndefined()
     expect(model.billing?.badges).toBeUndefined()
   })
 
-  it('reverts before the window opens', () => {
+  it('withholds the rate before the window opens', () => {
     const model = modelWithCurrentPromotion(base, Date.parse('2026-01-01T00:00:00+08:00'))
-    expect(model.billing).toEqual({ credits: 'x0.50', free: false })
+    expect(model.billing).toEqual({ free: false, rateUnknown: true })
+    expect(model.billing?.credits).toBeUndefined()
+  })
+
+  it('still states a rate for a row that never had a promotion', () => {
+    // The withholding is scoped to rows whose price derives from a promotion;
+    // an ordinary row keeps reporting what the upstream said.
+    const plain = {
+      id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 1000, maxTokens: 100,
+      supportsImages: true, billing: { credits: 'x0.79', free: false },
+    }
+    expect(modelWithCurrentPromotion(plain, Date.parse('2026-10-01T00:00:00+08:00'))).toBe(plain)
+  })
+
+  it('does not withhold the rate after a promo that equals the list price ends', () => {
+    // A factor of exactly 1 changes nothing, so the row's own rate is still the
+    // real price and there is nothing to withhold.
+    const neutral = { ...base, promotions: [{ ...base.promotions[0]!, factor: 1 }] }
+    const model = modelWithCurrentPromotion(neutral, Date.parse('2026-10-01T00:00:00+08:00'))
+    expect(model.billing?.credits).toBe('x0.50')
+    expect(model.billing?.rateUnknown).toBeUndefined()
   })
 
   it('scales a non-zero discount factor against the base rate', () => {

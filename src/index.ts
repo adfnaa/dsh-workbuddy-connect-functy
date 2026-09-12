@@ -255,6 +255,22 @@ interface VariantRuntime {
   catalogError: string | undefined
   /** When the last catalog attempt started, for the retry backoff. */
   lastFetchAtMs: number
+  /**
+   * Bumped whenever this variant's catalog generation changes — an account
+   * switch, a sign-out, or a new fetch superseding an older one. A request
+   * carries the generation it started under and refuses to write back if the
+   * generation has moved on, so a slow answer can never resurrect data the
+   * plugin has since decided to drop (spec §5: late responses are discarded).
+   */
+  catalogGeneration: number
+  /**
+   * The in-flight catalog fetch, if any.
+   *
+   * Concurrent callers share it rather than issuing a second request, which is
+   * what makes "one catalog request per variant at a time" (spec §5) true even
+   * when the sweep, a manual refresh, and a sign-in race each other.
+   */
+  inflightFetch: Promise<void> | undefined
   /** Notify the model directory that this variant's answers changed. */
   invalidate: () => void
   /** Whether the provider registered successfully. */
@@ -287,6 +303,7 @@ function createVariantRuntime(
   config: Config,
   variant: WorkBuddyVariant,
   current: () => Config,
+  identityOf: (variantId: string) => string | undefined,
 ): VariantRuntime {
   const client = new WorkBuddyUpstreamClient()
   const configured = configuredAuthFile(config, variant)
@@ -297,6 +314,12 @@ function createVariantRuntime(
   })
   const fallback = fallbackFor(variant)
   const catalog = new WorkBuddyCatalog(fallback)
+  // Start hidden: a variant must serve no models until an account has actually
+  // been adopted, so a signed-out variant is empty rather than showing a roster
+  // whose models could only fail. `adoptIdentity` is what reveals it, and it
+  // treats "never seen, still signed out" as no change — which is only correct
+  // if the pre-adoption state is already hidden.
+  catalog.setVisible(false)
   const probeStore = new WorkBuddyProbeStore({
     pluginVersion: WORKBUDDY_CONNECT_VERSION,
     path: workbuddyProbePath(variant.probeFilename),
@@ -307,6 +330,10 @@ function createVariantRuntime(
     credentials: store,
     client,
     consent: () => current().probeConsent === true,
+    // Observations are per account: the service reads and writes its records
+    // against this identity, so one account's detected levels never answer for
+    // another's, and an in-flight sweep cannot store under a new account.
+    account: () => identityOf(variant.id),
   })
   return {
     variant,
@@ -319,6 +346,8 @@ function createVariantRuntime(
     catalogSource: 'fallback',
     catalogError: undefined,
     lastFetchAtMs: 0,
+    catalogGeneration: 0,
+    inflightFetch: undefined,
     invalidate: () => {},
     registered: false,
   }
@@ -491,11 +520,66 @@ export function apply(ctx: Context, config: Config): void {
    */
   const lastIdentities = new Map<string, string>()
 
-  const runtimes = WORKBUDDY_VARIANTS.map(variant => createVariantRuntime(config, variant, () => current()))
+  const runtimes = WORKBUDDY_VARIANTS.map(variant => createVariantRuntime(
+    config,
+    variant,
+    () => current(),
+    id => lastIdentities.get(id),
+  ))
 
   // Same-origin routes backing each Plugin-configuration card; the webServer
   // service is optional (a headless profile serves no browser).
   const probeKey = createProbeKey()
+  /**
+   * Point a variant at an account identity, invalidating whatever the previous
+   * one left behind.
+   *
+   * One helper for all four transitions (sweep sign-in, sweep sign-out, manual
+   * refresh, manual refresh sign-out) because each of them used to do its own
+   * partial version, and the manual path forgot pieces the sweep did. Every
+   * transition bumps {@link VariantRuntime.catalogGeneration}, which is what
+   * makes an in-flight request from before the change refuse to write back.
+   *
+   * Probe observations are dropped whenever the account actually changes —
+   * including sign-out, and including the "signed out, then in as someone else"
+   * sequence that used to look like a first sighting and let the new account
+   * inherit the old one's detected levels. They are deliberately NOT cleared on
+   * a first sign-in: no previous account's data could leak there, and clearing
+   * would delete records this very account owns (written before a restart, or
+   * seeded while all of this is running).
+   *
+   * @param identity - the account now in effect, or `undefined` when signed out.
+   */
+  const adoptIdentity = (runtime: VariantRuntime, identity: string | undefined): void => {
+    const id = runtime.variant.id
+    const known = lastIdentities.get(id)
+    if (known === identity) return
+    const hadCredential = known !== undefined
+    if (identity === undefined) lastIdentities.delete(id)
+    else lastIdentities.set(id, identity)
+    // Any change of identity invalidates in-flight work and recorded answers.
+    runtime.catalogGeneration += 1
+    if (hadCredential && known !== identity) {
+      runtime.probeStore.clear()
+      runtime.invalidate()
+    }
+    if (identity === undefined) {
+      // Signed out: hide the group, and drop the models so they are not left
+      // registered-but-invisible if visibility ever flips back.
+      if (runtime.catalog.setVisible(false)) runtime.invalidate()
+      return
+    }
+    // Switching: serve this variant's fallback until the new account's catalog
+    // lands, so nothing from the previous account stays pickable.
+    if (hadCredential) {
+      runtime.catalog.set(runtime.fallback)
+      runtime.catalogSource = 'fallback'
+      runtime.catalogError = undefined
+    }
+    runtime.catalog.setVisible(true)
+    runtime.invalidate()
+  }
+
   ctx.inject(['webServer'], webCtx => {
     for (const runtime of runtimes) {
       registerWorkBuddyStatusRoute(webCtx, {
@@ -534,30 +618,15 @@ export function apply(ctx: Context, config: Config): void {
             }
           }
           if (credential === undefined) {
-            lastIdentities.delete(runtime.variant.id)
-            if (runtime.catalog.setVisible(false)) runtime.invalidate()
+            adoptIdentity(runtime, undefined)
             return { state: 'signed-out' }
           }
-          const id = runtime.variant.id
           const identity = `${credential.uid}:${credential.enterpriseId ?? ''}`
-          const known = lastIdentities.get(id)
-          if (known !== identity) {
-            // An identity switch reached through the manual path must do the
-            // same work the sweep would: the previous account's probe answers
-            // and catalog stop being served *now*, not after the fetch lands.
-            // Without this, a failed fetch for the new account left the old
-            // account's models pickable under a "live" label — and since a
-            // failed fetch never marks the source 'fallback', even the sweep's
-            // retry would not have recovered it.
-            if (known !== undefined) runtime.probeStore.clear()
-            runtime.catalog.set(runtime.fallback)
-            runtime.catalogSource = 'fallback'
-            runtime.catalogError = undefined
-          }
-          lastIdentities.set(id, identity)
-          runtime.catalog.setVisible(true)
-          runtime.invalidate()
-          await fetchCatalog(runtime, identity)
+          // Same transition the sweep performs: a switch reached through the
+          // manual path must drop the previous account's data *now*, not when
+          // the fetch lands, or a failed fetch leaves those models pickable.
+          adoptIdentity(runtime, identity)
+          await fetchCatalog(runtime)
           return runtime.catalogError === undefined
             ? { state: 'refreshed', reason: `${runtime.catalog.current().length} models` }
             : { state: 'failed', reason: runtime.catalogError }
@@ -565,6 +634,7 @@ export function apply(ctx: Context, config: Config): void {
       }, probeKey)
     }
   })
+
 
   // Each settings section is what makes its namespace "served" — which is how
   // both the Plugins tab (card dispatch) and the Models settings page (provider
@@ -616,31 +686,55 @@ export function apply(ctx: Context, config: Config): void {
   /**
    * Fetch one variant's catalog for the current credential.
    *
-   * Shared by the credential sweep and the card's manual refresh. Failure is
-   * recorded rather than thrown: the previous list (or the fallback roster)
-   * keeps serving, and the card reports the reason.
+   * Shared by the credential sweep and the card's manual refresh, and written
+   * so that concurrent callers cost one request and cannot interleave badly:
+   *
+   * - **One request at a time.** A second caller joins the in-flight fetch
+   *   instead of starting its own (spec §5: one catalog request per variant at
+   *   a time).
+   * - **Generation-checked write-back.** The request records the generation it
+   *   started under and writes nothing if the generation moved on — which is
+   *   what a slow answer from a superseded account must not do. Checking only
+   *   the *identity* was not enough: two refreshes for the same account can
+   *   still finish out of order, and the older one would win.
+   * - **`resolve()`, not `current()`.** Only `resolve()` performs the locked,
+   *   single-flight token renewal. Reading `current()` meant an expired token
+   *   made every catalog request fail until something else happened to refresh
+   *   it, leaving the group on the fallback roster.
    */
-  const fetchCatalog = async (runtime: VariantRuntime, identity: string): Promise<void> => {
-    const credential = await runtime.store.current()
-    if (credential === undefined) return
-    runtime.lastFetchAtMs = Date.now()
-    try {
-      const models = await runtime.client.fetchModels(credential)
-      // Discard a response that arrived after the account changed: it describes
-      // the old identity and must not overwrite the new one's list.
-      if (stopped || lastIdentities.get(runtime.variant.id) !== identity) return
+  const fetchCatalog = async (runtime: VariantRuntime): Promise<void> => {
+    const inflight = runtime.inflightFetch
+    if (inflight !== undefined) return inflight
+    const generation = runtime.catalogGeneration
+    const run = (async (): Promise<void> => {
+      let models: readonly WorkBuddyModelInfo[]
+      try {
+        const credential = await runtime.store.resolve()
+        models = await runtime.client.fetchModels(credential)
+      } catch (error: unknown) {
+        // Report only if this attempt is still the current one; a failure from
+        // a superseded attempt must not overwrite the newer state's error.
+        if (stopped || runtime.catalogGeneration !== generation) return
+        runtime.lastFetchAtMs = Date.now()
+        runtime.catalogError = error instanceof Error ? error.message.slice(0, 300) : String(error)
+        ctx.logger.warn(
+          `dsh-workbuddy-connect: ${runtime.variant.displayName} catalog unavailable; serving the fallback list`,
+          error,
+        )
+        runtime.invalidate()
+        return
+      }
+      if (stopped || runtime.catalogGeneration !== generation) return
+      runtime.lastFetchAtMs = Date.now()
       runtime.catalog.set([...models])
       runtime.catalogSource = 'live'
       runtime.catalogError = undefined
       runtime.invalidate()
-    } catch (error: unknown) {
-      runtime.catalogError = error instanceof Error ? error.message.slice(0, 300) : String(error)
-      ctx.logger.warn(
-        `dsh-workbuddy-connect: ${runtime.variant.displayName} catalog unavailable; serving the fallback list`,
-        error,
-      )
-      runtime.invalidate()
-    }
+    })().finally(() => {
+      if (runtime.inflightFetch === run) runtime.inflightFetch = undefined
+    })
+    runtime.inflightFetch = run
+    return run
   }
 
   /**
@@ -667,15 +761,13 @@ export function apply(ctx: Context, config: Config): void {
     })
     if (stopped) return
 
-    const id = runtime.variant.id
     if (credential === undefined) {
-      lastIdentities.delete(id)
-      if (runtime.catalog.setVisible(false)) runtime.invalidate()
+      adoptIdentity(runtime, undefined)
       return
     }
 
     const identity = `${credential.uid}:${credential.enterpriseId ?? ''}`
-    const known = lastIdentities.get(id)
+    const known = lastIdentities.get(runtime.variant.id)
     if (known === identity && runtime.catalog.isVisible()) {
       // Same account, already showing something. One case still needs a fetch:
       // an earlier attempt failed, so the group is on the fallback roster and
@@ -683,27 +775,12 @@ export function apply(ctx: Context, config: Config): void {
       // every sweep, so a persistent outage does not become a request loop.
       const stale = runtime.catalogSource === 'fallback'
       const due = Date.now() - runtime.lastFetchAtMs >= credentialPollMs() * CATALOG_RETRY_SWEEPS
-      if (stale && due) await fetchCatalog(runtime, identity)
+      if (stale && due) await fetchCatalog(runtime)
       return
     }
 
-    const switched = known !== undefined && known !== identity
-    lastIdentities.set(id, identity)
-    if (switched) {
-      // Observations are per account: the same model id can answer differently
-      // under a different subscription, so a switch invalidates them.
-      runtime.probeStore.clear()
-    }
-    // Serve a fallback roster from the moment the group becomes visible, rather
-    // than the previous identity's models, so nothing stale is pickable while
-    // the fetch is in flight.
-    runtime.catalog.set(runtime.fallback)
-    runtime.catalogSource = 'fallback'
-    runtime.catalogError = undefined
-    runtime.catalog.setVisible(true)
-    runtime.invalidate()
-
-    await fetchCatalog(runtime, identity)
+    adoptIdentity(runtime, identity)
+    await fetchCatalog(runtime)
   }
 
   /** Run one reconcile sweep across both variants. */

@@ -32,6 +32,17 @@ export interface WorkBuddyProbeServiceOptions {
   client: WorkBuddyUpstreamClient
   /** Whether probing is permitted at all; consulted before every sweep. */
   consent: () => boolean
+  /**
+   * The account currently in effect, as `uid:enterpriseId`, or `undefined`
+   * while signed out.
+   *
+   * Records are read and written against this identity, and it is re-checked
+   * after the sweep finishes: an observation produced under account A must not
+   * be stored once account B is in effect, however long the probe took. The
+   * caller's `clear()` on an account switch is not sufficient on its own,
+   * because an in-flight probe completes *after* that clear.
+   */
+  account: () => string | undefined
   sentinel?: SentinelFactory
   /** Injectable for tests; defaults to the live upstream sender. */
   send?: (modelId: string) => ProbeSender
@@ -68,7 +79,11 @@ export class WorkBuddyProbeService {
     if (info.reasoning?.supportedEfforts !== undefined && info.reasoning.supportedEfforts.length > 0) {
       return undefined
     }
-    return this.options.store.get(modelId, fingerprintModel(info))
+    const account = this.options.account()
+    // Signed out: there is no account to attribute an observation to, so none
+    // is served (a previous account's record must not answer here).
+    if (account === undefined) return undefined
+    return this.options.store.get(modelId, fingerprintModel(info), account)
   }
 
   /**
@@ -104,6 +119,13 @@ export class WorkBuddyProbeService {
         return { state: 'ok', validation: cached.validation, efforts: cached.efforts, requests: 0 }
       }
 
+      // The account this sweep is being run for. Captured before the requests
+      // and re-checked before the write-back: a probe can outlive the account
+      // it started under (a switch, or a manual refresh, clears records while
+      // the sweep is still talking to the upstream), and storing the result
+      // afterwards would resurrect the previous account's answer.
+      const account = this.options.account()
+      if (account === undefined) return { state: 'unavailable', reason: 'no WorkBuddy credential' }
       const credential = await this.options.credentials.current()
       if (credential === undefined) return { state: 'unavailable', reason: 'no WorkBuddy credential' }
 
@@ -118,7 +140,17 @@ export class WorkBuddyProbeService {
           send,
           ...this.options.sentinel === undefined ? {} : { sentinel: this.options.sentinel },
         })
-        const record = this.options.store.record(fingerprintModel(current), outcome.validation, outcome.efforts)
+        // The account may have changed while the requests were in flight. Drop
+        // the observation rather than attribute it to whoever is signed in now.
+        if (this.options.account() !== account) {
+          return { state: 'unavailable', reason: 'account changed during detection' }
+        }
+        const record = this.options.store.record(
+          fingerprintModel(current),
+          outcome.validation,
+          outcome.efforts,
+          account,
+        )
         this.options.store.set(modelId, record)
         if (outcome.validation === 'unknown') {
           return { state: 'unavailable', reason: outcome.reason }

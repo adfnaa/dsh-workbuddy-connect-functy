@@ -298,6 +298,9 @@ describe('catalog lifecycle', () => {
           efforts: ['low'],
           probedAtMs: Date.now(),
           pluginVersion: 'test',
+          // Observations are bound to the account that produced them; a record
+          // without this is refused by design, so this names account A.
+          account: 'uid-a:ent-1',
         },
       },
     }))

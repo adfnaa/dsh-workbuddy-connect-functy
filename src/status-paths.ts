@@ -108,6 +108,15 @@ export interface WorkBuddyWebModelBadge {
    */
   credits?: string
   /**
+   * The rate cannot be stated right now, and the card must say so.
+   *
+   * Set for a row whose price came from a promotion that has since ended: the
+   * upstream bakes the discounted value into the cached row, and the original
+   * price is not recoverable from it, so neither the old figure nor `free` may
+   * be repeated. The card renders "refresh to see the price" instead.
+   */
+  rateUnknown?: true
+  /**
    * Context capacity in tokens, taken verbatim from the upstream
    * `maxAllowedSize`/`maxInputTokens`, or from the international document's
    * `contextWindow.defaultLength` when it declares one.
