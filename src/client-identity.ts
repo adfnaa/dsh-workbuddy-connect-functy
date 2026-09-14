@@ -163,8 +163,8 @@ function cnSavedVersionPath(): string {
 /**
  * Resolve the chat identity for one region: installed App → region's saved
  * value → compiled-in fallback. Never throws — a missing App, an unreadable
- * plist, or a failed cache write degrades the version, it does not block a
- * message.
+ * plist, a failed cache write, or a reader that throws outright all degrade
+ * to {@link fallbackChatIdentity}; resolution never blocks a message.
  *
  * The production path caches per region (a message must not re-read the
  * install tree); any injected option bypasses the cache entirely so tests
@@ -182,14 +182,33 @@ export async function resolveChatIdentity(
     const cached = cache.get(region)
     if (cached !== undefined) return cached
   }
-  const identity = region === 'global'
-    ? await resolveGlobalIdentity(options)
-    : await resolveCnIdentity(options)
+  let identity: ChatIdentity
+  try {
+    identity = region === 'global'
+      ? await resolveGlobalIdentity(options)
+      : await resolveCnIdentity(options)
+  } catch {
+    // A reader that throws (unexpected filesystem error, injected test
+    // double) must not block a message and must not pin this degraded
+    // answer for the process lifetime: return the built-in fallback
+    // without caching it, so a later call can resolve properly again.
+    return fallbackChatIdentity(region)
+  }
   if (!injectable) cache.set(region, identity)
   return identity
 }
 
 const cache = new Map<WorkBuddyRegion, ChatIdentity>()
+
+/**
+ * The region's compiled-in fallback identity: the desktop form with the
+ * built-in version and no `CLI/…` segment. This is the single degraded
+ * shape every failure path converges on — a thrown reader, an unreadable
+ * bundle, or a missing cache all present this, never the legacy CLI UA.
+ */
+export function fallbackChatIdentity(region: WorkBuddyRegion): ChatIdentity {
+  return { clientVersion: region === 'global' ? FALLBACK_APP_VERSION : FALLBACK_CN_APP_VERSION }
+}
 
 /** CN: installed `WorkBuddy.app` → CN saved cache → CN fallback. */
 async function resolveCnIdentity(options: ResolveChatIdentityOptions): Promise<ChatIdentity> {
@@ -201,12 +220,14 @@ async function resolveCnIdentity(options: ResolveChatIdentityOptions): Promise<C
       clientVersion: installed.version,
       ...(cliVersion !== undefined && validCliVersion(cliVersion) ? { cliVersion } : {}),
     }
-    // Best-effort remember: a read-only home degrades to the fallback chain
-    // on the next start, it must not fail the request that just resolved.
+    // Best-effort remember of the App version only: the CLI version is read
+    // live from the bundle whenever the bundle exists, and once the App is
+    // gone the plan's degradation omits the `CLI/…` token instead of
+    // continuing to claim a version whose source no longer exists.
     try {
       await writeFileAtomic(
         savedPath,
-        `${JSON.stringify({ version: identity.clientVersion, ...identity.cliVersion === undefined ? {} : { cliVersion: identity.cliVersion }, observedAt: Date.now() }, null, 2)}\n`,
+        `${JSON.stringify({ version: identity.clientVersion, observedAt: Date.now() }, null, 2)}\n`,
         { mode: 0o600, dirMode: 0o700 },
       )
     } catch {
@@ -219,17 +240,13 @@ async function resolveCnIdentity(options: ResolveChatIdentityOptions): Promise<C
     if (typeof saved === 'object' && saved !== null && !Array.isArray(saved)) {
       const document = saved as Record<string, unknown>
       if (validAppVersion(document['version'])) {
-        const cliVersion = validCliVersion(document['cliVersion']) ? document['cliVersion'] : undefined
-        return {
-          clientVersion: document['version'],
-          ...cliVersion === undefined ? {} : { cliVersion },
-        }
+        return { clientVersion: document['version'] }
       }
     }
   } catch {
     // Absent or malformed cache: fall through to the compiled-in constant.
   }
-  return { clientVersion: FALLBACK_CN_APP_VERSION }
+  return fallbackChatIdentity('cn')
 }
 
 /**

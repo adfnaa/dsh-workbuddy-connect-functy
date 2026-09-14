@@ -96,7 +96,7 @@ describe('readCliVersion', () => {
 })
 
 describe('resolveChatIdentity (CN)', () => {
-  it('uses the installed bundle, reads its CLI version, and remembers both in the CN cache', async () => {
+  it('uses the installed bundle and reads its CLI version, but persists the App version only', async () => {
     const dir = await tempDir('wb-cn-')
     const saved = join(dir, 'cn.json')
     const identity = await resolveChatIdentity('cn', {
@@ -107,15 +107,19 @@ describe('resolveChatIdentity (CN)', () => {
     expect(identity).toEqual({ clientVersion: '5.5.6', cliVersion: '2.137.1' })
     const persisted = JSON.parse(await readFile(saved, 'utf8')) as Record<string, unknown>
     expect(persisted['version']).toBe('5.5.6')
-    expect(persisted['cliVersion']).toBe('2.137.1')
+    // The CLI version is read live from the bundle; the saved cache must not
+    // resurrect it after the App is gone (plan: unreadable metadata omits
+    // the CLI segment rather than claiming a version whose source is gone).
+    expect('cliVersion' in persisted).toBe(false)
   })
 
-  it('degrades to the saved value when no bundle is installed, then to the compiled-in fallback', async () => {
+  it('restores the saved App version without the CLI segment when no bundle is installed', async () => {
     const dir = await tempDir('wb-cn-')
     const saved = join(dir, 'cn.json')
+    // A legacy cache shape that happens to carry a cliVersion must not leak it.
     await writeFile(saved, JSON.stringify({ version: '5.5.5', cliVersion: '2.0.0' }), 'utf8')
     await expect(resolveChatIdentity('cn', { installedCn: async () => undefined, cnSavedPath: saved }))
-      .resolves.toEqual({ clientVersion: '5.5.5', cliVersion: '2.0.0' })
+      .resolves.toEqual({ clientVersion: '5.5.5' })
     await expect(resolveChatIdentity('cn', { installedCn: async () => undefined, cnSavedPath: join(dir, 'absent.json') }))
       .resolves.toEqual({ clientVersion: FALLBACK_CN_APP_VERSION })
   })
@@ -149,6 +153,21 @@ describe('resolveChatIdentity (CN)', () => {
       cliVersion: async () => '2.137.1',
       cnSavedPath: join(blocker, 'under', 'a', 'file.json'),
     })).resolves.toEqual({ clientVersion: '5.5.6', cliVersion: '2.137.1' })
+  })
+
+  it('degrades a throwing reader to the built-in fallback instead of throwing', async () => {
+    const dir = await tempDir('wb-cn-')
+    await expect(resolveChatIdentity('cn', {
+      installedCn: async () => {
+        throw new Error('unexpected fs error')
+      },
+      cnSavedPath: join(dir, 'cn.json'),
+    })).resolves.toEqual({ clientVersion: FALLBACK_CN_APP_VERSION })
+    await expect(resolveChatIdentity('global', {
+      resolveIntl: async () => {
+        throw new Error('unexpected fs error')
+      },
+    })).resolves.toEqual({ clientVersion: FALLBACK_APP_VERSION })
   })
 })
 

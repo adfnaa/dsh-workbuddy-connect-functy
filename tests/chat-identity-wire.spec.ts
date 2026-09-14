@@ -104,6 +104,25 @@ describe('probeEffort identity', () => {
     expect(body.max_tokens).toBe(16)
     expect('reasoning_effort' in body).toBe(false)
   })
+
+  it('still constructs chat and probe requests, in the desktop fallback form, when the resolver throws', async () => {
+    const throwing = new WorkBuddyUpstreamClient({
+      resolveChatIdentity: async () => {
+        throw new Error('boom')
+      },
+    })
+    const chatWire = captureFetch('{}')
+    const chat = await throwing.chatStream(CN, JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'hi' }] }))
+    expect(chat.ok).toBe(true)
+    expect((chatWire.last()[1].headers as Record<string, string>)['User-Agent'])
+      .toBe('WorkBuddy/5.5.6 WorkBuddy/5.5.6')
+
+    const probeWire = captureFetch('{"code":11150,"msg":"no"}', false, 400)
+    const probe = await throwing.probeEffort(GLOBAL, 'model-x', 'low', new AbortController().signal)
+    expect(probe.status).toBe(400)
+    expect((probeWire.last()[1].headers as Record<string, string>)['User-Agent'])
+      .toBe('WorkBuddy/5.5.2 WorkBuddy AI/5.5.2')
+  })
 })
 
 describe('unchanged paths (regression pin)', () => {

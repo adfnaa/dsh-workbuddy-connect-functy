@@ -84,6 +84,7 @@ export {
   CN_APP_VERSION_FILENAME,
   FALLBACK_CN_APP_VERSION,
   chatUserAgent,
+  fallbackChatIdentity,
   readCliVersion,
   resolveChatIdentity,
   validCliVersion,

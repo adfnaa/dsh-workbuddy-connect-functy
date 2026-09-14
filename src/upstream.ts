@@ -8,7 +8,7 @@
  */
 
 import { appUserAgent, resolveAppVersion, type AppVersionInfo } from './app-version.ts'
-import { chatUserAgent, resolveChatIdentity, type ChatIdentity } from './client-identity.ts'
+import { chatUserAgent, fallbackChatIdentity, resolveChatIdentity, type ChatIdentity } from './client-identity.ts'
 import type { WorkBuddyCredential } from './auth.ts'
 import type { ProbeAttempt } from './probe.ts'
 import { PROBE_MAX_TOKENS, PROBE_PROMPT } from './probe.ts'
@@ -514,13 +514,14 @@ export class WorkBuddyUpstreamClient {
     signal?: AbortSignal,
   ): Promise<WorkBuddyChatResult> {
     const region = regionOf(credential.domain)
-    // Identity resolution must never block a message: a failure of any read
-    // degrades to the shared CLI-form UA, not to a dropped request.
-    let userAgent: string | undefined
+    // Identity resolution must never block a message: any failure — a thrown
+    // resolver included — degrades to the desktop fallback form (built-in
+    // version, no CLI segment), never to the legacy CLI UA.
+    let userAgent: string
     try {
       userAgent = chatUserAgent(await this.resolveChatIdentity(region), region)
     } catch {
-      userAgent = undefined
+      userAgent = chatUserAgent(fallbackChatIdentity(region), region)
     }
     let response: Response
     try {
@@ -714,13 +715,13 @@ export class WorkBuddyUpstreamClient {
   ): Promise<ProbeAttempt> {
     const international = regionOf(credential.domain) === 'global'
     // Same identity rule as the chat path — chat and its probe sibling must
-    // never present two different clients. Resolution failure degrades to the
-    // shared CLI-form UA exactly as in `chatStream`.
-    let userAgent: string | undefined
+    // never present two different clients, and a thrown resolver degrades to
+    // the desktop fallback form exactly as in `chatStream`.
+    let userAgent: string
     try {
       userAgent = chatUserAgent(await this.resolveChatIdentity(international ? 'global' : 'cn'), international ? 'global' : 'cn')
     } catch {
-      userAgent = undefined
+      userAgent = chatUserAgent(fallbackChatIdentity(international ? 'global' : 'cn'), international ? 'global' : 'cn')
     }
     const payload: Record<string, unknown> = {
       model,
