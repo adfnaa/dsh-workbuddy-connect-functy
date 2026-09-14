@@ -81,6 +81,16 @@ export {
   type WorkBuddyAppVersionSource,
 } from './app-version.ts'
 export {
+  CN_APP_VERSION_FILENAME,
+  FALLBACK_CN_APP_VERSION,
+  chatUserAgent,
+  readCliVersion,
+  resolveChatIdentity,
+  validCliVersion,
+  type ChatIdentity,
+  type ResolveChatIdentityOptions,
+} from './client-identity.ts'
+export {
   defaultDesktopAuthCandidates,
   defaultDesktopAuthPath,
   desktopAuthCandidatesFor,

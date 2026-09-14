@@ -8,6 +8,7 @@
  */
 
 import { appUserAgent, resolveAppVersion, type AppVersionInfo } from './app-version.ts'
+import { chatUserAgent, resolveChatIdentity, type ChatIdentity } from './client-identity.ts'
 import type { WorkBuddyCredential } from './auth.ts'
 import type { ProbeAttempt } from './probe.ts'
 import { PROBE_MAX_TOKENS, PROBE_PROMPT } from './probe.ts'
@@ -128,6 +129,7 @@ const CN_CHAT_BASE = 'https://copilot.tencent.com'
 const CN_BILLING_BASE = 'https://www.codebuddy.cn'
 const GLOBAL_BASE = 'https://www.workbuddy.ai'
 
+/** Shared CLI-form User-Agent for refresh and the CN catalog; chat and probe present the desktop identity (client-identity.ts). */
 const CLIENT_UA = 'CLI/2.63.2 CodeBuddy/2.63.2'
 const JSON_TIMEOUT_MS = 30_000
 const ERROR_BODY_LIMIT = 4096
@@ -285,10 +287,17 @@ function commonHeaders(credential: WorkBuddyCredential): Record<string, string> 
   }
 }
 
-/** Chat request headers, including the X-No-* conventions the official CLI uses. */
-function chatHeaders(credential: WorkBuddyCredential): Record<string, string> {
+/**
+ * Chat request headers, including the X-No-* conventions the official CLI uses.
+ *
+ * `userAgent` carries the desktop identity for chat and probe requests; when
+ * it is absent the shared CLI-form UA applies. Refresh shares `commonHeaders`
+ * but never this override, so the two paths cannot drift into each other.
+ */
+function chatHeaders(credential: WorkBuddyCredential, userAgent?: string): Record<string, string> {
   const headers: Record<string, string> = {
     ...commonHeaders(credential),
+    ...userAgent === undefined ? {} : { 'User-Agent': userAgent },
     'Content-Type': 'application/json',
     // 安全红线：chat 请求绝不携带 refresh token。
     ...credential.uid === '' ? { 'X-No-User-Id': '1' } : { 'X-User-Id': credential.uid },
@@ -465,6 +474,12 @@ export interface WorkBuddyCatalogFetch {
 export interface WorkBuddyUpstreamClientOptions {
   /** App-version resolver for international catalog requests; injectable for tests. */
   resolveAppVersion?: () => Promise<AppVersionInfo>
+  /**
+   * Chat-identity resolver for chat and probe requests; injectable for tests.
+   * Defaults to `client-identity.ts`'s per-region chain. Refresh, catalog, and
+   * billing never consult it — those requests keep their long-standing headers.
+   */
+  resolveChatIdentity?: (region: WorkBuddyRegion) => Promise<ChatIdentity>
 }
 
 /**
@@ -481,12 +496,15 @@ export class WorkBuddyUpstreamClient {
    * Injectable so tests never read the real filesystem.
    */
   private readonly resolveAppVersion: () => Promise<AppVersionInfo>
+  /** Chat-identity resolver; see {@link WorkBuddyUpstreamClientOptions.resolveChatIdentity}. */
+  private readonly resolveChatIdentity: (region: WorkBuddyRegion) => Promise<ChatIdentity>
 
   /** Provenance of the most recent successful catalog fetch, for the card. */
   lastCatalog: WorkBuddyCatalogFetch | undefined
 
   constructor(options: WorkBuddyUpstreamClientOptions = {}) {
     this.resolveAppVersion = options.resolveAppVersion ?? (() => resolveAppVersion())
+    this.resolveChatIdentity = options.resolveChatIdentity ?? (region => resolveChatIdentity(region))
   }
 
   /** POST the chat endpoint; a successful answer is the raw SSE response. */
@@ -495,12 +513,21 @@ export class WorkBuddyUpstreamClient {
     bodyJson: string,
     signal?: AbortSignal,
   ): Promise<WorkBuddyChatResult> {
+    const region = regionOf(credential.domain)
+    // Identity resolution must never block a message: a failure of any read
+    // degrades to the shared CLI-form UA, not to a dropped request.
+    let userAgent: string | undefined
+    try {
+      userAgent = chatUserAgent(await this.resolveChatIdentity(region), region)
+    } catch {
+      userAgent = undefined
+    }
     let response: Response
     try {
       response = await fetch(`${chatBase(credential)}/v2/chat/completions`, {
         method: 'POST',
-        headers: { ...chatHeaders(credential), 'Authorization': `Bearer ${credential.accessToken}` },
-        body: regionOf(credential.domain) === 'global' ? prepareInternationalChatBody(bodyJson) : bodyJson,
+        headers: { ...chatHeaders(credential, userAgent), 'Authorization': `Bearer ${credential.accessToken}` },
+        body: region === 'global' ? prepareInternationalChatBody(bodyJson) : bodyJson,
         ...signal === undefined ? {} : { signal },
       })
     } catch (error: unknown) {
@@ -686,6 +713,15 @@ export class WorkBuddyUpstreamClient {
     signal: AbortSignal,
   ): Promise<ProbeAttempt> {
     const international = regionOf(credential.domain) === 'global'
+    // Same identity rule as the chat path — chat and its probe sibling must
+    // never present two different clients. Resolution failure degrades to the
+    // shared CLI-form UA exactly as in `chatStream`.
+    let userAgent: string | undefined
+    try {
+      userAgent = chatUserAgent(await this.resolveChatIdentity(international ? 'global' : 'cn'), international ? 'global' : 'cn')
+    } catch {
+      userAgent = undefined
+    }
     const payload: Record<string, unknown> = {
       model,
       stream: true,
@@ -701,7 +737,7 @@ export class WorkBuddyUpstreamClient {
     try {
       response = await fetch(`${chatBase(credential)}/v2/chat/completions`, {
         method: 'POST',
-        headers: { ...chatHeaders(credential), 'Authorization': `Bearer ${credential.accessToken}` },
+        headers: { ...chatHeaders(credential, userAgent), 'Authorization': `Bearer ${credential.accessToken}` },
         body: JSON.stringify(payload),
         signal,
       })
