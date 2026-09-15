@@ -255,9 +255,11 @@ function ModelProbe({ model, card, label, t }: {
   const [note, setNote] = useState<WorkBuddyWebProbeModel>()
   const inFlight = useRef(false)
   const mounted = useRef(false)
+  const readSeq = useRef(0)
   const tooltipId = useId()
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
+    const seq = ++readSeq.current
     const response = await fetch(card.statusPath, {
       credentials: 'same-origin',
       headers: { accept: 'application/json' },
@@ -265,7 +267,7 @@ function ModelProbe({ model, card, label, t }: {
     })
     if (!response.ok) throw new Error(`HTTP ${response.status}`)
     const value = await response.json() as WorkBuddyWebStatus
-    if (mounted.current && !signal?.aborted) setStatus(value)
+    if (mounted.current && !signal?.aborted && seq === readSeq.current) setStatus(value)
   }, [card.statusPath])
 
   useEffect(() => {
