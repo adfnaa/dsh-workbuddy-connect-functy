@@ -225,6 +225,24 @@ describe('WorkBuddy plugin card', () => {
     expect(view!.root.findByType('input').props.checked).toBe(false)
   })
 
+  it.each([[], [{ id: 'plain', name: 'Plain', contextWindow: 300_000 }]])('can disable the preference after alternatives disappear: %j', async (models?: { id: string, name: string, contextWindow: number }) => {
+    statusBody.useMaximumContextWindow = true
+    statusBody.models = models === undefined ? [] : [models]
+    request.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method !== 'POST') return { ok: true, json: async () => statusBody }
+      const action = JSON.parse(String(init.body))
+      expect(action).toEqual({ action: 'set-maximum-context-window', enabled: false })
+      statusBody = { ...statusBody, useMaximumContextWindow: false }
+      return { ok: true, json: async () => ({ state: 'updated' }) }
+    })
+    await mount(AI_CARD_VARIANT)
+    await press(en.tabContext)
+    expect(view!.root.findByType('input').props.checked).toBe(true)
+    await act(async () => { view!.root.findByType('input').props.onChange({ currentTarget: { checked: false } }) })
+    expect(request.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
+    expect(view!.root.findAllByType('input')).toHaveLength(0)
+  })
+
   it('shows a host-side preference failure instead of silently refreshing', async () => {
     status()
     statusBody.useMaximumContextWindow = false

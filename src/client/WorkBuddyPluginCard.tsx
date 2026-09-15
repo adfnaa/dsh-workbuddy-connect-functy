@@ -332,13 +332,14 @@ function ContextTable({ models, t, useMaximumContextWindow, disabled, onUseMaxim
     // Largest first: the big windows are the ones a user reaches for, and the
     // small ones are then easy to spot at the end.
     .sort((a, b) => (b.contextWindow as number) - (a.contextWindow as number))
-  if (known.length === 0) return null
   const canSelectMaximum = known.some(model => model.maxContextWindow !== undefined
     && model.maxContextWindow > (model.defaultContextWindow ?? model.contextWindow ?? 0))
+  const showPreference = onUseMaximumContextWindow !== undefined && (canSelectMaximum || useMaximumContextWindow === true)
+  if (known.length === 0 && !showPreference) return null
   return (
     <div style={quotaListStyle}>
       <h3 style={quotaTitleStyle}>{t('contextHeading')}</h3>
-      {canSelectMaximum && onUseMaximumContextWindow !== undefined ? (
+      {showPreference && onUseMaximumContextWindow !== undefined ? (
         <label style={contextPreferenceStyle}>
           <input
             type="checkbox"

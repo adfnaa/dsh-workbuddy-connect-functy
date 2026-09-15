@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -43,6 +43,53 @@ afterEach(async () => {
 })
 
 describe('WorkBuddy Host settings integration', () => {
+  it('restores the saved maximum-window preference after restarting and can disable it', async () => {
+    root = await mkdtemp(join(tmpdir(), 'workbuddy-context-restart-'))
+    const settingsFile = join(root, 'settings.json')
+    const aiFile = join(root, 'ai.info')
+    await writeFile(settingsFile, '{}')
+    await writeFile(aiFile, credentialDocument('www.workbuddy.ai'))
+    vi.stubEnv('DSH_HOME', root)
+    vi.stubEnv('WORKBUDDY_AUTH_FILE', join(root, 'absent-cn.info'))
+    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', aiFile)
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline in tests') }))
+    class FileSettings extends SettingsProvider {
+      readonly writable = true
+      protected async load(): Promise<Record<string, unknown>> {
+        return JSON.parse(await readFile(settingsFile, 'utf8'))
+      }
+      protected async persist(ns: SettingsNamespace, section: Record<string, unknown>): Promise<void> {
+        const document = await this.load()
+        document[ns] = section
+        await writeFile(settingsFile, JSON.stringify(document))
+      }
+    }
+    const boot = async (): Promise<Context> => {
+      const ctx = new Context()
+      context = ctx
+      await ctx.plugin(LlmRuntime)
+      await ctx.plugin(FileSettings)
+      await ctx.plugin(WorkBuddy, {})
+      await vi.waitFor(async () => {
+        expect((await ctx.llm.listModels('workbuddy-ai')).length).toBeGreaterThan(0)
+      })
+      return ctx
+    }
+    let ctx = await boot()
+    await ctx.settings.update('workbuddy-ai', { useMaximumContextWindow: true })
+    await ctx.fiber.dispose()
+    ctx = await boot()
+    expect(ctx.settings.get('workbuddy-ai')).toMatchObject({ useMaximumContextWindow: true })
+    expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')).context?.contextWindow).toBe(1_000_000)
+    await ctx.settings.update('workbuddy-ai', { useMaximumContextWindow: false })
+    await vi.waitFor(async () => {
+      expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')).context?.contextWindow).toBe(300_000)
+    })
+    await ctx.fiber.dispose()
+    ctx = await boot()
+    expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')).context?.contextWindow).toBe(300_000)
+  })
+
   it('exposes the provider directory entry, the settings section, and the fallback model list', async () => {
     root = await mkdtemp(join(tmpdir(), 'dsh-workbuddy-connect-settings-'))
     vi.stubEnv('DSH_HOME', root)
