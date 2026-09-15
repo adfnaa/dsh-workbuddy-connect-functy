@@ -103,6 +103,8 @@ const quotaLabelStyle: CSSProperties = { display: 'flex', justifyContent: 'space
 const modelBadgeStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }
 const modelOfferStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 2 }
 const modelRateStyle: CSSProperties = { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)' }
+const contextPreferenceStyle: CSSProperties = { display: 'flex', alignItems: 'flex-start', gap: 9, padding: '10px 12px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, color: 'var(--dsw-alias-label-primary)', fontSize: 13, lineHeight: '20px' }
+const contextPreferenceCopyStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 2 }
 const modelBadgeChipStyle: CSSProperties = {
   padding: '1px 8px', borderRadius: 999, fontSize: 11, lineHeight: '18px',
   background: 'var(--dsw-alias-state-success-subtle, rgba(34, 160, 107, 0.12))',
@@ -318,9 +320,12 @@ function ModelOfferRow({ model, t }: {
  * the default is the budget actually requested, while the larger value is a
  * ceiling the upstream would accept.
  */
-function ContextTable({ models, t }: {
+function ContextTable({ models, t, useMaximumContextWindow, disabled, onUseMaximumContextWindow }: {
   models: readonly WorkBuddyWebModelBadge[] | undefined
   t: WorkBuddyPluginCardInjected['t']
+  useMaximumContextWindow?: boolean
+  disabled?: boolean
+  onUseMaximumContextWindow?: (enabled: boolean) => void
 }): React.ReactNode {
   const known = (models ?? [])
     .filter(model => model.contextWindow !== undefined)
@@ -328,9 +333,25 @@ function ContextTable({ models, t }: {
     // small ones are then easy to spot at the end.
     .sort((a, b) => (b.contextWindow as number) - (a.contextWindow as number))
   if (known.length === 0) return null
+  const canSelectMaximum = known.some(model => model.maxContextWindow !== undefined
+    && model.maxContextWindow > (model.defaultContextWindow ?? model.contextWindow ?? 0))
   return (
     <div style={quotaListStyle}>
       <h3 style={quotaTitleStyle}>{t('contextHeading')}</h3>
+      {canSelectMaximum && onUseMaximumContextWindow !== undefined ? (
+        <label style={contextPreferenceStyle}>
+          <input
+            type="checkbox"
+            checked={useMaximumContextWindow === true}
+            disabled={disabled}
+            onChange={event => { onUseMaximumContextWindow(event.currentTarget.checked) }}
+          />
+          <span style={contextPreferenceCopyStyle}>
+            <span>{t('useMaximumContextWindow')}</span>
+            <span style={modelRateStyle}>{t('useMaximumContextWindowHint')}</span>
+          </span>
+        </label>
+      ) : null}
       {known.map(model => {
         const capacity = model.contextWindow as number
         // Only shown when the upstream declared a larger alternative, so the
@@ -343,9 +364,11 @@ function ContextTable({ models, t }: {
             <span>{model.name}</span>
             <span style={modelOfferStyle}>
               <span style={{ textAlign: 'right' }}>{formatTokens(capacity)}</span>
-              {alternative === undefined
-                ? null
-                : <span style={modelRateStyle}>{t('contextUpTo', { size: formatTokens(alternative) })}</span>}
+              {alternative !== undefined
+                ? <span style={modelRateStyle}>{t('contextUpTo', { size: formatTokens(alternative) })}</span>
+                : model.defaultContextWindow !== undefined && model.defaultContextWindow < capacity
+                  ? <span style={modelRateStyle}>{t('contextDefault', { size: formatTokens(model.defaultContextWindow) })}</span>
+                  : null}
             </span>
           </div>
         )
@@ -707,7 +730,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
    * the host never accepts a prompt, a sentinel, or a model outside its own
    * catalog from here.
    */
-  const control = useCallback(async (action: { action: 'probe'; model: string } | { action: 'clear' }): Promise<void> => {
+  const control = useCallback(async (action: { action: 'probe'; model: string } | { action: 'clear' } | { action: 'set-maximum-context-window'; enabled: boolean }): Promise<void> => {
     const key = status?.status === 'signed-in' ? status.probeKey : undefined
     if (key === undefined) return
     setBusy(true)
@@ -890,7 +913,15 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
                     </div>
                   ) : tab === 'context' ? (
                     <div style={tabPanelStyle}>
-                      <ContextTable models={status.models} t={t} />
+                      <ContextTable
+                        models={status.models}
+                        t={t}
+                        disabled={busy}
+                        {...status.useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: status.useMaximumContextWindow }}
+                        {...variant.id === AI_CARD_VARIANT.id
+                          ? { onUseMaximumContextWindow: (enabled: boolean) => { void control({ action: 'set-maximum-context-window', enabled }) } }
+                          : {}}
+                      />
                     </div>
                   ) : (
                     <div style={tabPanelStyle}>

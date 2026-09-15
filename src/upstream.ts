@@ -30,6 +30,8 @@ export interface WorkBuddyUpstreamModel {
   id: string
   name: string
   contextWindow: number
+  /** The upstream's preferred window before an optional maximum is selected. */
+  defaultContextWindow?: number
   maxInputTokens?: number
   supportedContextWindows?: readonly number[]
   promotions?: readonly WorkBuddyPromotion[]
@@ -840,6 +842,8 @@ export function parseModelCatalog(data: Record<string, unknown>, international =
         contextWindow: international && isObject(wrapped['contextWindow']) && positive(wrapped['contextWindow']['defaultLength'])
           ? wrapped['contextWindow']['defaultLength'] : input,
         ...(international ? {
+          ...isObject(wrapped['contextWindow']) && positive(wrapped['contextWindow']['defaultLength'])
+            ? { defaultContextWindow: wrapped['contextWindow']['defaultLength'] } : {},
           maxInputTokens: input,
           supportedContextWindows: isObject(wrapped['contextWindow']) && Array.isArray(wrapped['contextWindow']['supportedLengths'])
             ? wrapped['contextWindow']['supportedLengths'].filter(positive) : [],

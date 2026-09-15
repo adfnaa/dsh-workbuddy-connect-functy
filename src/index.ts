@@ -221,6 +221,8 @@ export interface Config {
    * until the user explicitly agrees.
    */
   probeConsent?: boolean
+  /** Use the largest context window the international catalog explicitly offers. */
+  useMaximumContextWindow?: boolean
 }
 
 /** Explicit CN desktop auth-file path (shared by the plugin schema and its section). */
@@ -230,11 +232,14 @@ const AUTH_FILE_AI_FIELD = z.string().description('WorkBuddy AI desktop auth fil
 /** Probe authorization (shared by the plugin schema and the CN section). */
 const PROBE_CONSENT_FIELD = z.boolean().default(false)
   .description('Authorize reasoning-effort probes (each probe sends real requests that may consume credit)')
+const MAXIMUM_CONTEXT_WINDOW_FIELD = z.boolean().default(false)
+  .description('Use the largest context window declared by WorkBuddy AI when alternatives are available')
 
 export const Config: z<Config> = z.object({
   authFile: AUTH_FILE_FIELD,
   authFileAI: AUTH_FILE_AI_FIELD,
   probeConsent: PROBE_CONSENT_FIELD,
+  useMaximumContextWindow: MAXIMUM_CONTEXT_WINDOW_FIELD,
 })
 
 /**
@@ -251,9 +256,10 @@ const CN_SECTION: z<Config> = z.object({
   probeConsent: PROBE_CONSENT_FIELD,
 })
 
-/** The international card's settings section: only its own auth-file path. */
+/** The international card's settings section and its context-window preference. */
 const AI_SECTION: z<Config> = z.object({
   authFileAI: AUTH_FILE_AI_FIELD,
+  useMaximumContextWindow: MAXIMUM_CONTEXT_WINDOW_FIELD,
 })
 
 /** One variant's live runtime, assembled by {@link createVariantRuntime}. */
@@ -357,6 +363,7 @@ function createVariantRuntime(
   })
   const fallback = fallbackFor(variant)
   const catalog = new WorkBuddyCatalog(fallback)
+  if (variant.id !== CN_VARIANT.id) catalog.setUseMaximumContextWindow(config.useMaximumContextWindow === true)
   // Start hidden: a variant must serve no models until an account has actually
   // been adopted, so a signed-out variant is empty rather than showing a roster
   // whose models could only fail. `adoptIdentity` is what reveals it, and it
@@ -584,6 +591,7 @@ export function apply(ctx: Context, config: Config): void {
   // Same-origin routes backing each Plugin-configuration card; the webServer
   // service is optional (a headless profile serves no browser).
   const probeKey = createProbeKey()
+  let setMaximumContextWindow: ((enabled: boolean) => Promise<{ state: string; reason?: string }>) | undefined
   /**
    * Point a variant at an account identity, invalidating whatever the previous
    * one left behind.
@@ -665,6 +673,7 @@ export function apply(ctx: Context, config: Config): void {
         catalog: () => catalogSection(runtime),
         probe: () => probeSection(runtime, current().probeConsent === true),
         probeKey,
+        ...runtime.variant.id === CN_VARIANT.id ? {} : { useMaximumContextWindow: () => current().useMaximumContextWindow === true },
       })
       registerWorkBuddyProbeRoute(webCtx, {
         path: runtime.variant.probePath,
@@ -706,6 +715,12 @@ export function apply(ctx: Context, config: Config): void {
             ? { state: 'refreshed', reason: `${runtime.catalog.current().length} models` }
             : { state: 'failed', reason: runtime.catalogError }
         },
+        ...runtime.variant.id === CN_VARIANT.id ? {} : {
+          setMaximumContextWindow: async enabled => {
+            if (setMaximumContextWindow === undefined) return { state: 'failed', reason: 'settings are unavailable' }
+            return setMaximumContextWindow(enabled)
+          },
+        },
       }, probeKey)
     }
   })
@@ -734,9 +749,15 @@ export function apply(ctx: Context, config: Config): void {
       ...sources.cn().authFile === undefined ? {} : { authFile: sources.cn().authFile },
       ...sources.cn().probeConsent === undefined ? {} : { probeConsent: sources.cn().probeConsent },
       ...sources.ai().authFileAI === undefined ? {} : { authFileAI: sources.ai().authFileAI },
+      ...sources.ai().useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: sources.ai().useMaximumContextWindow },
     })
+    const applyMaximumContextWindow = (next: Config): void => {
+      const runtime = runtimes.find(candidate => candidate.variant.id !== CN_VARIANT.id)
+      if (runtime?.catalog.setUseMaximumContextWindow(next.useMaximumContextWindow === true)) runtime.invalidate()
+    }
     const repointStores = (): void => {
       const next = merged()
+      applyMaximumContextWindow(next)
       for (const runtime of runtimes) {
         runtime.store.setDesktopPath(configuredAuthFile(next, runtime.variant))
       }
@@ -749,6 +770,10 @@ export function apply(ctx: Context, config: Config): void {
       setSource(source) { sources.ai = source as () => Config; current = merged },
       onChange: repointStores,
     })
+    setMaximumContextWindow = async enabled => {
+      await settingsCtx.settings.update(WORKBUDDY_AI_SETTINGS_NS, { useMaximumContextWindow: enabled })
+      return { state: 'updated' }
+    }
   })
 
   ctx.effect(() => () => {

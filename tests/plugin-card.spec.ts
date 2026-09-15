@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { WorkBuddyPluginCard } from '../src/client/WorkBuddyPluginCard.tsx'
+import { AI_CARD_VARIANT, WorkBuddyPluginCard } from '../src/client/WorkBuddyPluginCard.tsx'
 import { en } from '../src/client/locales.ts'
 
 /**
@@ -67,10 +67,10 @@ describe('WorkBuddy plugin card', () => {
   })
 
   /** Mount the card and expand it so the probe section renders. */
-  async function mount(): Promise<void> {
+  async function mount(variant?: typeof AI_CARD_VARIANT): Promise<void> {
     // The card only reads `t`; the remaining props belong to the slot that
     // mounts it in DSH, so the test supplies the one it uses.
-    const props = { t } as unknown as Parameters<typeof WorkBuddyPluginCard>[0]
+    const props = { t, ...variant === undefined ? {} : { variant } } as unknown as Parameters<typeof WorkBuddyPluginCard>[0]
     await act(async () => { view = create(createElement(WorkBuddyPluginCard, props)) })
     await act(async () => { view!.root.findAllByType('button')[0]!.props.onClick() })
   }
@@ -197,5 +197,20 @@ describe('WorkBuddy plugin card', () => {
     const rendered = JSON.stringify(view!.toJSON())
     expect(rendered).toContain('Signed in as')
     expect(rendered).not.toContain('Signed in as ')
+  })
+
+  it('writes the international maximum-window preference from the context tab', async () => {
+    status()
+    statusBody.useMaximumContextWindow = false
+    statusBody.models = [{
+      id: 'deepseek-v4.1-flash', name: 'Deepseek-V4.1-Flash',
+      contextWindow: 300_000, defaultContextWindow: 300_000, maxContextWindow: 1_000_000,
+    }]
+    await mount(AI_CARD_VARIANT)
+    await press(en.tabContext)
+    const checkbox = view!.root.findByType('input')
+    await act(async () => { checkbox.props.onChange({ currentTarget: { checked: true } }) })
+    const post = request.mock.calls.find(([, init]) => init?.method === 'POST')!
+    expect(JSON.parse(post[1].body)).toEqual({ action: 'set-maximum-context-window', enabled: true })
   })
 })

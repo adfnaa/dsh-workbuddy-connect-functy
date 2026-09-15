@@ -292,8 +292,17 @@ describe('international catalog parsing', () => {
     // plugin actually requests under. Reporting the ceiling as the window would
     // overstate the budget.
     expect(ctx!.contextWindow).toBe(300_000)
+    expect(ctx!.defaultContextWindow).toBe(300_000)
     expect(ctx!.maxInputTokens).toBe(1_000_000)
     expect(ctx!.supportedContextWindows).toEqual([300_000, 1_000_000])
+  })
+
+  it('can switch an international catalog to its declared maximum windows', () => {
+    const catalog = new WorkBuddyCatalog(FALLBACK_WORKBUDDY_AI_MODELS)
+    expect(catalog.current().find(model => model.id === 'deepseek-v4.1-flash')?.contextWindow).toBe(300_000)
+    expect(catalog.setUseMaximumContextWindow(true)).toBe(true)
+    expect(catalog.current().find(model => model.id === 'deepseek-v4.1-flash')?.contextWindow).toBe(1_000_000)
+    expect(catalog.current().find(model => model.id === 'gpt-5.6-sol')?.contextWindow).toBe(1_000_000)
   })
 
   it('does not attach international fields to the CN shape', () => {

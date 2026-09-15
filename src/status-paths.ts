@@ -51,14 +51,17 @@ export interface WorkBuddyWebProbeSection {
 export interface WorkBuddyProbeAction {
   /**
    * `probe` spends credit on one model; `clear` drops recorded observations;
-   * `refresh` re-reads the credential and re-fetches the model catalog.
+   * `refresh` re-reads the credential and re-fetches the model catalog;
+   * `set-maximum-context-window` persists the international card preference.
    *
-   * All three are writes, which is why they share this route's in-process key
+   * All four are writes, which is why they share this route's in-process key
    * and loopback guards rather than the read-only status GET.
    */
-  action: 'probe' | 'clear' | 'refresh'
+  action: 'probe' | 'clear' | 'refresh' | 'set-maximum-context-window'
   /** Target model id; required for `probe`. */
   model?: string
+  /** Requested value for `set-maximum-context-window`. */
+  enabled?: boolean
 }
 
 /**
@@ -127,12 +130,12 @@ export interface WorkBuddyWebModelBadge {
    * `maxAllowedSize`/`maxInputTokens`, or from the international document's
    * `contextWindow.defaultLength` when it declares one.
    *
-   * Reported, never chosen: the upstream describes one effective capacity per
-   * model, so the plugin displays what it was told rather than offering a menu
-   * of its own. (The desktop app's "300K / 1M" picker is client-side policy
-   * that appears nowhere in the catalog.)
+   * The international card can opt into the largest declared alternative. The
+   * selected value is what DSH receives as its actual context budget.
    */
   contextWindow?: number
+  /** The upstream default, when the card currently uses a selected maximum. */
+  defaultContextWindow?: number
   /**
    * The international document's larger selectable window, when it declares
    * one, and the model's maximum input ceiling.
@@ -171,6 +174,8 @@ export type WorkBuddyWebStatus =
     catalog?: WorkBuddyWebCatalog
     /** Reasoning-effort probe state, consent, and recorded observations. */
     probe?: WorkBuddyWebProbeSection
+    /** International-card preference selecting larger declared context windows. */
+    useMaximumContextWindow?: boolean
     /**
      * In-process key authorizing probe control writes. Handed to the card with
      * the status document (the card is same-origin and already had to pass the

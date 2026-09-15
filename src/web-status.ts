@@ -38,6 +38,8 @@ export interface WorkBuddyStatusRouteOptions {
   catalog?: () => WorkBuddyWebCatalog | undefined
   /** In-process key authorizing probe control writes. */
   probeKey?: string
+  /** International-card preference selecting larger declared context windows. */
+  useMaximumContextWindow?: () => boolean
   /**
    * Route path to mount. Defaults to the CN variant's path so existing callers
    * and tests keep their behaviour; the international variant passes its own.
@@ -128,6 +130,9 @@ export async function workBuddyWebStatus(
         ...typeof model.contextWindow === 'number' && model.contextWindow > 0
           ? { contextWindow: model.contextWindow }
           : {},
+        ...typeof model.defaultContextWindow === 'number' && model.defaultContextWindow > 0
+          ? { defaultContextWindow: model.defaultContextWindow }
+          : {},
         ...maxContextWindow === undefined || maxContextWindow === model.contextWindow
           ? {}
           : { maxContextWindow },
@@ -154,6 +159,7 @@ export async function workBuddyWebStatus(
       ...statusWithModels,
       probe: deps.probe(),
       ...deps.probeKey === undefined ? {} : { probeKey: deps.probeKey },
+      ...deps.useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: deps.useMaximumContextWindow() },
     }
   try {
     const credential = await deps.store.current()

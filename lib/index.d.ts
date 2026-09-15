@@ -225,6 +225,8 @@ interface WorkBuddyUpstreamModel {
   id: string;
   name: string;
   contextWindow: number;
+  /** The upstream's preferred window before an optional maximum is selected. */
+  defaultContextWindow?: number;
   maxInputTokens?: number;
   supportedContextWindows?: readonly number[];
   promotions?: readonly WorkBuddyPromotion[];
@@ -704,6 +706,7 @@ declare const FALLBACK_WORKBUDDY_AI_MODELS: readonly WorkBuddyModelInfo[];
 declare class WorkBuddyCatalog {
   private models;
   private visible;
+  private useMaximumContextWindow;
   constructor(initial?: readonly WorkBuddyModelInfo[]);
   /** Current entries; empty while the variant has no usable credential. */
   current(): readonly WorkBuddyModelInfo[];
@@ -716,6 +719,8 @@ declare class WorkBuddyCatalog {
    * caller can skip an invalidation that would re-render an identical list.
    */
   setVisible(visible: boolean): boolean;
+  /** Select the largest declared international window where the upstream offers one. */
+  setUseMaximumContextWindow(useMaximum: boolean): boolean;
   /** Models to fall back to when the upstream fetch fails; ignores visibility. */
   fallback(): readonly WorkBuddyModelInfo[];
 }
@@ -1126,6 +1131,8 @@ interface Config {
    * until the user explicitly agrees.
    */
   probeConsent?: boolean;
+  /** Use the largest context window the international catalog explicitly offers. */
+  useMaximumContextWindow?: boolean;
 }
 declare const Config: z<Config>;
 /**

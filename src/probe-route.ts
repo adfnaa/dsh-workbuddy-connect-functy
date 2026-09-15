@@ -47,6 +47,8 @@ export interface WorkBuddyProbeRouteOptions {
    * as authorizing an action. Requires the same in-process key as `probe`.
    */
   refresh?: () => Promise<{ state: string; reason?: string }>
+  /** Persist and apply the international context-window preference. */
+  setMaximumContextWindow?: (enabled: boolean) => Promise<{ state: string; reason?: string }>
   /**
    * Route path to mount. Defaults to the CN variant's path so existing callers
    * and tests keep their behaviour; the international variant passes its own.
@@ -103,6 +105,11 @@ function parseAction(text: string): WorkBuddyProbeAction | undefined {
   // No payload: the variant is already known from the route the request arrived
   // on, so the browser cannot ask this route to refresh a different provider.
   if (action === 'refresh') return { action: 'refresh' }
+  if (action === 'set-maximum-context-window') {
+    return typeof wrapped['enabled'] === 'boolean'
+      ? { action: 'set-maximum-context-window', enabled: wrapped['enabled'] }
+      : undefined
+  }
   if (action === 'probe') {
     const model = wrapped['model']
     if (typeof model !== 'string' || model.trim() === '') return undefined
@@ -154,6 +161,14 @@ export function workBuddyProbeHandler(
           return
         }
         json(res, 200, await deps.refresh())
+        return
+      }
+      if (action.action === 'set-maximum-context-window') {
+        if (deps.setMaximumContextWindow === undefined) {
+          json(res, 404, { error: 'context-window-setting-not-supported' })
+          return
+        }
+        json(res, 200, await deps.setMaximumContextWindow(action.enabled === true))
         return
       }
       json(res, 200, await deps.probe(action.model as string))

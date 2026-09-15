@@ -67,10 +67,10 @@ export const FALLBACK_WORKBUDDY_AI_MODELS: readonly WorkBuddyModelInfo[] = [
   { id: 'balanced-model', name: 'Balanced', contextWindow: 256_000, maxTokens: 32_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, defaultEffort: 'medium', canDisableThinking: false }, billing: { credits: 'x0.59', free: false } },
   { id: 'primary-model', name: 'Primary', contextWindow: 272_000, maxTokens: 72_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, defaultEffort: 'high', canDisableThinking: false }, billing: { credits: 'x3.31', free: false } },
   { id: 'deep-model', name: 'Deep', contextWindow: 176_000, maxTokens: 24_000, supportsImages: true, reasoning: { supports: false, onlyReasoning: false, canDisableThinking: true }, billing: { credits: 'x3.33', free: false } },
-  { id: 'hy4-preview-f', name: 'Hy4 preview', contextWindow: 300_000, maxTokens: 64_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, supportedEfforts: ['high'], defaultEffort: 'high', canDisableThinking: false }, billing: { free: false, rateUnknown: true } },
+  { id: 'hy4-preview-f', name: 'Hy4 preview', contextWindow: 300_000, defaultContextWindow: 300_000, supportedContextWindows: [300_000, 1_000_000], maxTokens: 64_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, supportedEfforts: ['high'], defaultEffort: 'high', canDisableThinking: false }, billing: { free: false, rateUnknown: true } },
   { id: 'hy3', name: 'Hy3', contextWindow: 192_000, maxTokens: 64_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, supportedEfforts: ['low', 'high'], defaultEffort: 'high', canDisableThinking: false }, billing: { free: false, rateUnknown: true } },
-  { id: 'deepseek-v4.1-flash', name: 'Deepseek-V4.1-Flash', contextWindow: 300_000, maxTokens: 128_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, defaultEffort: 'high', canDisableThinking: false }, billing: { free: false, rateUnknown: true } },
-  { id: 'gpt-6-astra', name: 'GPT-6-Astra', contextWindow: 400_000, maxTokens: 128_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium', canDisableThinking: true }, billing: { credits: 'x6.67', free: false } },
+  { id: 'deepseek-v4.1-flash', name: 'Deepseek-V4.1-Flash', contextWindow: 300_000, defaultContextWindow: 300_000, supportedContextWindows: [300_000, 1_000_000], maxTokens: 128_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, defaultEffort: 'high', canDisableThinking: false }, billing: { free: false, rateUnknown: true } },
+  { id: 'gpt-6-astra', name: 'GPT-6-Astra', contextWindow: 400_000, defaultContextWindow: 400_000, supportedContextWindows: [400_000, 1_000_000], maxTokens: 128_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium', canDisableThinking: true }, billing: { credits: 'x6.67', free: false } },
   { id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol', contextWindow: 1_000_000, maxTokens: 128_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium', canDisableThinking: true }, billing: { credits: 'x3.47', free: false } },
   { id: 'gpt-5.6-terra', name: 'GPT-5.6-Terra', contextWindow: 1_000_000, maxTokens: 128_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium', canDisableThinking: true }, billing: { credits: 'x1.39', free: false } },
   { id: 'gpt-5.6-luna', name: 'GPT-5.6-Luna', contextWindow: 1_000_000, maxTokens: 128_000, supportsImages: true, reasoning: { supports: true, onlyReasoning: true, supportedEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium', canDisableThinking: true }, billing: { credits: 'x0.14', free: false } },
@@ -100,13 +100,20 @@ export const FALLBACK_WORKBUDDY_AI_MODELS: readonly WorkBuddyModelInfo[] = [
 export class WorkBuddyCatalog {
   private models: readonly WorkBuddyModelInfo[]
   private visible = true
+  private useMaximumContextWindow = false
 
   constructor(initial: readonly WorkBuddyModelInfo[] = FALLBACK_WORKBUDDY_MODELS) { this.models = initial }
 
   /** Current entries; empty while the variant has no usable credential. */
   current(): readonly WorkBuddyModelInfo[] {
     if (!this.visible) return []
-    return this.models.map(model => modelWithCurrentPromotion(model))
+    return this.models.map(model => {
+      const current = modelWithCurrentPromotion(model)
+      const maximum = current.supportedContextWindows === undefined ? undefined : Math.max(...current.supportedContextWindows)
+      return this.useMaximumContextWindow && maximum !== undefined && maximum > current.contextWindow
+        ? { ...current, contextWindow: maximum }
+        : current
+    })
   }
 
   /** Replace the list; callers invalidate their adapter snapshot after this. */
@@ -126,6 +133,13 @@ export class WorkBuddyCatalog {
   setVisible(visible: boolean): boolean {
     if (this.visible === visible) return false
     this.visible = visible
+    return true
+  }
+
+  /** Select the largest declared international window where the upstream offers one. */
+  setUseMaximumContextWindow(useMaximum: boolean): boolean {
+    if (this.useMaximumContextWindow === useMaximum) return false
+    this.useMaximumContextWindow = useMaximum
     return true
   }
 
