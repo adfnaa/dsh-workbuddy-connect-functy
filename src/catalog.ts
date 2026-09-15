@@ -111,7 +111,7 @@ export class WorkBuddyCatalog {
       const current = modelWithCurrentPromotion(model)
       const maximum = current.supportedContextWindows === undefined ? undefined : Math.max(...current.supportedContextWindows)
       return this.useMaximumContextWindow && maximum !== undefined && maximum > current.contextWindow
-        ? { ...current, contextWindow: maximum }
+        ? { ...current, defaultContextWindow: current.defaultContextWindow ?? current.contextWindow, contextWindow: maximum }
         : current
     })
   }

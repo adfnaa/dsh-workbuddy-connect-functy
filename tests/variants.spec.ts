@@ -303,6 +303,13 @@ describe('international catalog parsing', () => {
     expect(catalog.setUseMaximumContextWindow(true)).toBe(true)
     expect(catalog.current().find(model => model.id === 'deepseek-v4.1-flash')?.contextWindow).toBe(1_000_000)
     expect(catalog.current().find(model => model.id === 'gpt-5.6-sol')?.contextWindow).toBe(1_000_000)
+
+    const legacyCatalog = new WorkBuddyCatalog([{
+      id: 'legacy', name: 'Legacy', contextWindow: 300_000,
+      supportedContextWindows: [300_000, 1_000_000], maxTokens: 1, supportsImages: false,
+    }])
+    legacyCatalog.setUseMaximumContextWindow(true)
+    expect(legacyCatalog.current()[0]).toMatchObject({ contextWindow: 1_000_000, defaultContextWindow: 300_000 })
   })
 
   it('does not attach international fields to the CN shape', () => {

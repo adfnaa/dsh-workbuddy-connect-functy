@@ -750,6 +750,13 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
           : `HTTP ${response.status}`
         throw new Error(message)
       }
+      if (action.action === 'set-maximum-context-window'
+        && (typeof value !== 'object' || value === null || (value as Record<string, unknown>)['state'] !== 'updated')) {
+        const reason = typeof value === 'object' && value !== null && 'reason' in value
+          ? String((value as Record<string, unknown>)['reason'])
+          : t('requestFailed')
+        throw new Error(reason)
+      }
       await refresh(controller.signal)
     } catch (error: unknown) {
       if (mounted.current && controller.signal.aborted !== true) {

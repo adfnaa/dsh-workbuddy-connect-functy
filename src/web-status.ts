@@ -115,6 +115,7 @@ export async function workBuddyWebStatus(
       // when the upstream said nothing.
       const supported = model.supportedContextWindows ?? []
       const maxContextWindow = supported.length > 0 ? Math.max(...supported) : undefined
+      const defaultContextWindow = model.defaultContextWindow ?? model.contextWindow
       return {
         id: model.id,
         name: model.name,
@@ -130,10 +131,10 @@ export async function workBuddyWebStatus(
         ...typeof model.contextWindow === 'number' && model.contextWindow > 0
           ? { contextWindow: model.contextWindow }
           : {},
-        ...typeof model.defaultContextWindow === 'number' && model.defaultContextWindow > 0
-          ? { defaultContextWindow: model.defaultContextWindow }
+        ...typeof defaultContextWindow === 'number' && defaultContextWindow > 0 && defaultContextWindow < model.contextWindow
+          ? { defaultContextWindow }
           : {},
-        ...maxContextWindow === undefined || maxContextWindow === model.contextWindow
+        ...maxContextWindow === undefined || maxContextWindow <= defaultContextWindow
           ? {}
           : { maxContextWindow },
         ...typeof model.maxInputTokens === 'number' && model.maxInputTokens > 0

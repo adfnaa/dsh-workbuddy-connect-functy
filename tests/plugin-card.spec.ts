@@ -199,18 +199,45 @@ describe('WorkBuddy plugin card', () => {
     expect(rendered).not.toContain('Signed in as ')
   })
 
-  it('writes the international maximum-window preference from the context tab', async () => {
+  it('keeps the international maximum-window switch available to turn off again', async () => {
     status()
     statusBody.useMaximumContextWindow = false
     statusBody.models = [{
       id: 'deepseek-v4.1-flash', name: 'Deepseek-V4.1-Flash',
       contextWindow: 300_000, defaultContextWindow: 300_000, maxContextWindow: 1_000_000,
     }]
+    request.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method !== 'POST') return { ok: true, json: async () => statusBody }
+      const action = JSON.parse(String(init.body)) as { enabled: boolean }
+      statusBody.useMaximumContextWindow = action.enabled
+      statusBody.models = [{
+        id: 'deepseek-v4.1-flash', name: 'Deepseek-V4.1-Flash',
+        contextWindow: action.enabled ? 1_000_000 : 300_000,
+        defaultContextWindow: 300_000, maxContextWindow: 1_000_000,
+      }]
+      return { ok: true, json: async () => ({ state: 'updated' }) }
+    })
     await mount(AI_CARD_VARIANT)
     await press(en.tabContext)
-    const checkbox = view!.root.findByType('input')
-    await act(async () => { checkbox.props.onChange({ currentTarget: { checked: true } }) })
-    const post = request.mock.calls.find(([, init]) => init?.method === 'POST')!
-    expect(JSON.parse(post[1].body)).toEqual({ action: 'set-maximum-context-window', enabled: true })
+    await act(async () => { view!.root.findByType('input').props.onChange({ currentTarget: { checked: true } }) })
+    expect(view!.root.findByType('input').props.checked).toBe(true)
+    await act(async () => { view!.root.findByType('input').props.onChange({ currentTarget: { checked: false } }) })
+    expect(view!.root.findByType('input').props.checked).toBe(false)
+  })
+
+  it('shows a host-side preference failure instead of silently refreshing', async () => {
+    status()
+    statusBody.useMaximumContextWindow = false
+    statusBody.models = [{
+      id: 'deepseek-v4.1-flash', name: 'Deepseek-V4.1-Flash',
+      contextWindow: 300_000, maxContextWindow: 1_000_000,
+    }]
+    request.mockImplementation(async (_url: string, init?: RequestInit) => init?.method === 'POST'
+      ? { ok: true, json: async () => ({ state: 'failed', reason: 'settings are unavailable' }) }
+      : { ok: true, json: async () => statusBody })
+    await mount(AI_CARD_VARIANT)
+    await press(en.tabContext)
+    await act(async () => { view!.root.findByType('input').props.onChange({ currentTarget: { checked: true } }) })
+    expect(JSON.stringify(view!.toJSON())).toContain('settings are unavailable')
   })
 })
