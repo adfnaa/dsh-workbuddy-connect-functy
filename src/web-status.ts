@@ -166,6 +166,9 @@ export async function workBuddyWebStatus(
     const credential = await deps.store.current()
     if (credential !== undefined) {
       const credits = await deps.client.fetchCredits(credential)
+      // `unlimited` and `cycleResetTime` ride along as-is: the card must see
+      // "no cap" as its own state, and the fetch only sets them when the
+      // upstream actually reported them.
       return { ...probed, credits }
     }
   } catch (error: unknown) {

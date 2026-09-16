@@ -94,12 +94,15 @@ export interface WorkBuddyWebCreditAccount {
   packageName: string
   remain: number
   size: number
+  unlimited?: true
 }
 
 /** Aggregated credit answer rendered by the plugin card. */
 export interface WorkBuddyWebCredits {
   total: number
   accounts: readonly WorkBuddyWebCreditAccount[]
+  unlimited?: true
+  cycleResetTime?: string
 }
 
 /** Billing convenience facts for one model, rendered as card badges. */

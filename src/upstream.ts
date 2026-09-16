@@ -106,12 +106,25 @@ export interface WorkBuddyCreditAccount {
   packageName: string
   remain: number
   size: number
+  unlimited?: true
 }
 
 /** Aggregated credit answer for one credential. */
 export interface WorkBuddyCredits {
   total: number
   accounts: readonly WorkBuddyCreditAccount[]
+  /**
+   * The account's cycle quota is uncapped (`limitNum === -1` on the CN
+   * enterprise endpoint).
+   *
+   * A separate flag rather than a `-1`/`0` sentinel in {@link total}: the two
+   * mean opposite things to a reader ("no limit" vs "nothing left"), and the
+   * existing negative-clamp in the personal branch would turn a sentinel into
+   * a plausible-looking zero. Every renderer must therefore test this flag
+   * first and not fall back to `total` when it is set.
+   */
+  unlimited?: true
+  cycleResetTime?: string
 }
 
 /** Token refresh answer; fields the upstream omits stay absent. */
@@ -130,6 +143,37 @@ export type WorkBuddyChatResult =
 const CN_CHAT_BASE = 'https://copilot.tencent.com'
 const CN_BILLING_BASE = 'https://www.codebuddy.cn'
 const GLOBAL_BASE = 'https://www.workbuddy.ai'
+
+/**
+ * Display name for the single synthetic row the enterprise endpoint produces.
+ *
+ * The endpoint reports one cycle quota, not the personal endpoint's list of
+ * named packages, so the card's "by package" table has exactly one row.
+ */
+const enterprisePackageName = 'enterprise'
+
+/**
+ * Field names and value types of a response document, for diagnostics.
+ *
+ * Names and `typeof` only. This string ends up in the status route and then in
+ * the browser, and the response describes the account's own usage; the values
+ * themselves must never travel. Only the document and its `data` member are
+ * described, so the output stays small.
+ */
+function describeShape(document: unknown): string {
+  if (typeof document !== 'object' || document === null || Array.isArray(document)) {
+    return typeof document
+  }
+  const record = document as Record<string, unknown>
+  const at = (source: Record<string, unknown>): string => {
+    const keys = Object.keys(source).slice(0, 24)
+    return keys.length === 0 ? '(empty)' : keys.map(key => `${key}:${typeof source[key]}`).join(', ')
+  }
+  const top = `top-level { ${at(record)} }`
+  const data = record['data']
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return top
+  return `${top}; data { ${at(data as Record<string, unknown>)} }`
+}
 
 /** Shared CLI-form User-Agent for refresh and the CN catalog; chat and probe present the desktop identity (client-identity.ts). */
 const CLIENT_UA = 'CLI/2.63.2 CodeBuddy/2.63.2'
@@ -623,8 +667,28 @@ export class WorkBuddyUpstreamClient {
     return models
   }
 
-  /** POST the billing endpoint for the aggregated remaining credit. */
+  /**
+   * POST the billing endpoint for the aggregated remaining credit.
+   *
+   * Two upstream shapes, chosen by account type:
+   *
+   * - **CN enterprise** (`regionOf === 'cn'` and `enterpriseId` non-empty) asks
+   *   `/v2/billing/meter/get-enterprise-user-usage`, which answers with a single
+   *   cycle quota. The personal endpoint serves these accounts an empty
+   *   `Accounts` list, which the card then renders as "0 credit" — a wrong
+   *   number rather than a visible failure (issue #31).
+   * - **Everyone else** keeps the personal endpoint unchanged.
+   *
+   * The region gate is load-bearing: the enterprise endpoint is unverified for
+   * the global region, so an international credential that happens to carry an
+   * `enterpriseId` must stay on the measured personal path instead of being
+   * moved onto an unmeasured one.
+   */
   async fetchCredits(credential: WorkBuddyCredential): Promise<WorkBuddyCredits> {
+    if (regionOf(credential.domain) === 'cn'
+      && credential.enterpriseId !== undefined && credential.enterpriseId !== '') {
+      return await this.fetchEnterpriseCredits(credential)
+    }
     const now = new Date()
     const format = (date: Date): string => [
       date.getFullYear().toString().padStart(4, '0'),
@@ -684,6 +748,80 @@ export class WorkBuddyUpstreamClient {
     }
     return { total, accounts }
   }
+
+  /**
+   * CN enterprise credit read: a single cycle quota instead of a package list.
+   *
+   * Verified against the WorkBuddy desktop app (`app.asar`,
+   * `BackendProvider.getEnterpriseUsage` and `CloudAccountRepo.billing`): the
+   * body is an empty object and the account identity travels only in the
+   * headers. The two official call sites disagree on the field spelling
+   * (`limitNum`/`credit` vs `limit_num`/`used_num`), so both are accepted.
+   *
+   * A body carrying no recognisable quota field is a hard error rather than a
+   * zero. Rendering `0` for "we did not understand the answer" is exactly how
+   * issue #31 stayed invisible while users saw a plausible wrong number.
+   *
+   * The error names fields and types only: it reaches the browser, and the
+   * response body may describe the account's usage.
+   */
+  private async fetchEnterpriseCredits(credential: WorkBuddyCredential): Promise<WorkBuddyCredits> {
+    const response = await fetch(`${CN_BILLING_BASE}/v2/billing/meter/get-enterprise-user-usage`, {
+      method: 'POST',
+      headers: billingHeaders(credential),
+      body: JSON.stringify({}),
+      signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
+    })
+    const envelope = await readEnvelope(response)
+    if (!response.ok || envelope.code !== 0) throw envelopeError(response.status, envelope)
+    // The official reader accepts the payload at `data.data`, `data`, or the
+    // envelope itself; the observed CN answer puts the fields at `data`.
+    const sources: Record<string, unknown>[] = []
+    for (const candidate of [envelope.data, envelope.document]) {
+      if (typeof candidate !== 'object' || candidate === null || Array.isArray(candidate)) continue
+      const record = candidate as Record<string, unknown>
+      if (typeof record['data'] === 'object' && record['data'] !== null && !Array.isArray(record['data'])) {
+        sources.push(record['data'] as Record<string, unknown>)
+      }
+      sources.push(record)
+    }
+    const numberAt = (source: Record<string, unknown>, key: string): number | undefined =>
+      typeof source[key] === 'number' ? source[key] as number : undefined
+    let limit: number | undefined
+    let used = 0
+    let resetTime: string | undefined
+    for (const source of sources) {
+      const candidate = numberAt(source, 'limitNum') ?? numberAt(source, 'limit_num')
+      if (candidate === undefined) continue
+      limit = candidate
+      used = numberAt(source, 'credit') ?? numberAt(source, 'used_num') ?? 0
+      if (typeof source['cycleResetTime'] === 'string' && source['cycleResetTime'] !== '') {
+        resetTime = source['cycleResetTime'] as string
+      }
+      break
+    }
+    if (limit === undefined) {
+      throw new Error(`workbuddy enterprise billing response carried no recognised quota field (expected limitNum/limit_num + credit/used_num; received ${describeShape(envelope.document)})`)
+    }
+    // `-1` is the upstream's "no cap" marker, not a balance. Carried as an
+    // explicit flag so no renderer can mistake it for a number.
+    if (limit === -1) {
+      return {
+        total: 0,
+        accounts: [{ packageName: enterprisePackageName, remain: 0, size: 0, unlimited: true }],
+        unlimited: true,
+        ...resetTime === undefined ? {} : { cycleResetTime: resetTime },
+      }
+    }
+    let remain = limit - used
+    if (remain < 0) remain = 0
+    return {
+      total: remain,
+      accounts: [{ packageName: enterprisePackageName, remain, size: limit }],
+      ...resetTime === undefined ? {} : { cycleResetTime: resetTime },
+    }
+  }
+
 
   /**
    * One probe request: a real streaming chat call carrying the effort under

@@ -261,6 +261,152 @@ describe('WorkBuddyUpstreamClient.fetchCredits', () => {
   })
 })
 
+/**
+ * CN enterprise accounts are served by a different endpoint than personal
+ * ones; asking the personal endpoint for an enterprise account answers with an
+ * empty `Accounts` list, which renders as a confident "0 credit" (issue #31).
+ *
+ * The personal-path expectations above double as the zero-regression guard:
+ * they run on `CREDENTIAL`, which carries no `enterpriseId`.
+ */
+describe('WorkBuddyUpstreamClient.fetchCredits (CN enterprise)', () => {
+  const ENTERPRISE: WorkBuddyCredential = { ...CREDENTIAL, enterpriseId: 'ent-1' }
+
+  /** The enterprise answer: a single cycle quota, not a package list. */
+  function enterpriseEnvelope(fields: Record<string, unknown>): string {
+    return JSON.stringify({ code: 0, msg: 'OK', data: fields })
+  }
+
+  it('requests the enterprise endpoint instead of the personal one', async () => {
+    const fetchMock = vi.fn(async () => fakeResponse(enterpriseEnvelope({ limitNum: 500, credit: 120 })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await new WorkBuddyUpstreamClient().fetchCredits(ENTERPRISE)
+
+    const url = String((fetchMock.mock.calls[0] as unknown[])[0])
+    expect(url).toBe('https://www.codebuddy.cn/v2/billing/meter/get-enterprise-user-usage')
+    expect(url).not.toContain('get-user-resource')
+  })
+
+  it('sends the enterprise identity headers and an empty body', async () => {
+    const fetchMock = vi.fn(async () => fakeResponse(enterpriseEnvelope({ limitNum: 500, credit: 120 })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await new WorkBuddyUpstreamClient().fetchCredits(ENTERPRISE)
+
+    const init = (fetchMock.mock.calls[0] as unknown[])[1] as { headers: Record<string, string>; body: string }
+    expect(init.headers['X-Enterprise-Id']).toBe('ent-1')
+    expect(init.headers['X-Tenant-Id']).toBe('ent-1')
+    // Identity travels in the headers only; the body stays an empty object.
+    expect(JSON.parse(init.body)).toEqual({})
+  })
+
+  it('reads camelCase quota fields', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(enterpriseEnvelope({ limitNum: 500, credit: 120 }))))
+
+    const credits = await new WorkBuddyUpstreamClient().fetchCredits(ENTERPRISE)
+
+    expect(credits.total).toBe(380)
+    expect(credits.accounts).toEqual([{ packageName: 'enterprise', remain: 380, size: 500 }])
+    expect(credits.unlimited).toBeUndefined()
+  })
+
+  it('reads snake_case quota fields (the app has both spellings)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(enterpriseEnvelope({ limit_num: 500, used_num: 120 }))))
+
+    const credits = await new WorkBuddyUpstreamClient().fetchCredits(ENTERPRISE)
+
+    expect(credits.total).toBe(380)
+    expect(credits.accounts).toEqual([{ packageName: 'enterprise', remain: 380, size: 500 }])
+  })
+
+  it('marks limitNum -1 as unlimited rather than a negative balance', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(enterpriseEnvelope({ limitNum: -1, credit: 120 }))))
+
+    const credits = await new WorkBuddyUpstreamClient().fetchCredits(ENTERPRISE)
+
+    expect(credits.unlimited).toBe(true)
+    // Never a negative number, and never a zero that reads as "exhausted".
+    expect(credits.total).toBe(0)
+    expect(credits.accounts[0]!.remain).toBe(0)
+  })
+
+  it('clamps remaining quota to zero when usage exceeds limit', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(enterpriseEnvelope({ limitNum: 500, credit: 600 }))))
+
+    const credits = await new WorkBuddyUpstreamClient().fetchCredits(ENTERPRISE)
+
+    expect(credits.total).toBe(0)
+    expect(credits.accounts).toEqual([{ packageName: 'enterprise', remain: 0, size: 500 }])
+  })
+
+  it('parses cycleResetTime when present in the response', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(enterpriseEnvelope({
+      limitNum: 500, credit: 120, cycleResetTime: '2026-10-01T00:00:00Z',
+    }))))
+
+    const credits = await new WorkBuddyUpstreamClient().fetchCredits(ENTERPRISE)
+
+    expect(credits.cycleResetTime).toBe('2026-10-01T00:00:00Z')
+  })
+
+  it('throws a diagnosable error when no quota field is recognised', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(enterpriseEnvelope({ unexpected: 'shape' }))))
+
+    // Must be a hard error: silently returning 0 is what hid issue #31.
+    await expect(new WorkBuddyUpstreamClient().fetchCredits(ENTERPRISE))
+      .rejects.toThrow(/no recognised quota field/)
+  })
+
+  it('names the received fields in that error, without their values', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(
+      enterpriseEnvelope({ secretQuota: 998877, accountLabel: 'should-not-leak' }),
+    )))
+
+    const error = await new WorkBuddyUpstreamClient().fetchCredits(ENTERPRISE)
+      .then(() => undefined, (reason: unknown) => reason as Error)
+
+    // Field names and types are the diagnostic; values must not travel, since
+    // this message reaches the browser and describes the account's usage.
+    expect(error?.message).toContain('secretQuota:number')
+    expect(error?.message).not.toContain('998877')
+    expect(error?.message).not.toContain('should-not-leak')
+  })
+
+  it('keeps a personal credential on the personal endpoint', async () => {
+    const fetchMock = vi.fn(async () => fakeResponse(billingEnvelope([
+      { PackageName: 'pkg', CycleCapacitySize: 100, CycleCapacityRemain: 40 },
+    ])))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const credits = await new WorkBuddyUpstreamClient().fetchCredits(CREDENTIAL)
+
+    expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toContain('get-user-resource')
+    expect(credits.total).toBe(40)
+  })
+
+  it('keeps an international credential on the personal endpoint even with an enterpriseId', async () => {
+    const fetchMock = vi.fn(async () => fakeResponse(billingEnvelope([
+      { PackageName: 'pkg', CycleCapacitySize: 100, CycleCapacityRemain: 40 },
+    ])))
+    vi.stubGlobal('fetch', fetchMock)
+
+    // The global enterprise endpoint is unverified, so the region gate must
+    // hold: an international credential stays on the measured personal path.
+    const credits = await new WorkBuddyUpstreamClient().fetchCredits({
+      ...CREDENTIAL,
+      domain: 'www.workbuddy.ai',
+      enterpriseId: 'ent-global',
+    })
+
+    const url = String((fetchMock.mock.calls[0] as unknown[])[0])
+    expect(url).toContain('workbuddy.ai')
+    expect(url).toContain('get-user-resource')
+    expect(url).not.toContain('get-enterprise-user-usage')
+    expect(credits.total).toBe(40)
+  })
+})
+
 describe('normalizeCredits', () => {
   it('keeps a bare multiplier untouched', () => {
     expect(normalizeCredits('x0.79')).toBe('x0.79')

@@ -258,4 +258,49 @@ describe('WorkBuddy plugin card', () => {
     await act(async () => { view!.root.findByType('input').props.onChange({ currentTarget: { checked: true } }) })
     expect(JSON.stringify(view!.toJSON())).toContain('settings are unavailable')
   })
+
+  it('renders an uncapped quota as unlimited rather than as zero', async () => {
+    status()
+    statusBody.credits = { total: 0, accounts: [], unlimited: true }
+    await mount()
+
+    const rendered = JSON.stringify(view!.toJSON())
+    expect(rendered).toContain(en.creditsTotalUnlimited)
+    expect(rendered).not.toContain(en.creditsTotal.replace('{total}', '0'))
+  })
+
+  it('renders cycleResetTime when present in credits', async () => {
+    status()
+    statusBody.credits = { total: 100, accounts: [], cycleResetTime: '2026-10-01T00:00:00Z' }
+    await mount()
+    const rendered = JSON.stringify(view!.toJSON())
+    expect(rendered).toContain(en.cycleResetAt.split('{time}')[0]!)
+  })
+
+  it('renders enterprise quota and handles 0 remaining without hiding row', async () => {
+    status()
+    statusBody.credits = {
+      total: 0,
+      accounts: [{ packageName: 'enterprise', remain: 0, size: 500 }],
+    }
+    await mount()
+    await press(en.tabDetails)
+    const rendered = JSON.stringify(view!.toJSON())
+    expect(rendered).toContain(en.packageEnterprise)
+    expect(rendered).toContain('0 / 500')
+  })
+
+  it('renders unlimited enterprise quota in details tab', async () => {
+    status()
+    statusBody.credits = {
+      total: 0,
+      unlimited: true,
+      accounts: [{ packageName: 'enterprise', remain: 0, size: 0, unlimited: true }],
+    }
+    await mount()
+    await press(en.tabDetails)
+    const rendered = JSON.stringify(view!.toJSON())
+    expect(rendered).toContain(en.packageEnterprise)
+    expect(rendered).toContain(en.unlimitedQuota)
+  })
 })

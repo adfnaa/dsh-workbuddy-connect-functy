@@ -221,6 +221,12 @@ function formatTime(ms: number): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(ms))
 }
 
+function formatCycleReset(time: string): string {
+  const parsed = Date.parse(time)
+  if (!Number.isNaN(parsed)) return formatTime(parsed)
+  return time
+}
+
 /**
  * One billing package as a labeled progress bar.
  *
@@ -230,12 +236,35 @@ function formatTime(ms: number): string {
  * honest "remaining N" line printed below it. Unknown size therefore renders the
  * percent slot as unknown copy and an unfilled, indeterminate track.
  */
-function CreditBar({ label, remain, size, t }: {
+function CreditBar({ label, remain, size, unlimited, t }: {
   label: string
   remain: number
   size: number
+  unlimited?: boolean | undefined
   t: WorkBuddyPluginCardInjected['t']
 }): React.ReactNode {
+  if (unlimited === true) {
+    const quotaText = t('unlimitedQuota')
+    return (
+      <div style={quotaGroupStyle}>
+        <div style={quotaLabelStyle}>
+          <span>{label}</span>
+          <span>{quotaText}</span>
+        </div>
+        <div
+          style={progressTrackStyle}
+          role="progressbar"
+          aria-label={label}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={100}
+        >
+          <div style={progressFillStyle(100)} />
+        </div>
+        <p style={bodyStyle}>{quotaText}</p>
+      </div>
+    )
+  }
   const sizeKnown = size > 0
   const detail = sizeKnown
     ? t('exactRemaining', { remain: formatNumber(remain), size: formatNumber(size) })
@@ -903,8 +932,17 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
                         <div style={quotaListStyle}>
                           <div style={rowStyle}>
                             <h3 style={quotaTitleStyle}>{t('creditsHeading')}</h3>
-                            <span style={bodyStyle}>{t('creditsTotal', { total: formatNumber(status.credits.total) })}</span>
+                            {/* `unlimited` first: the placeholder total is 0 and
+                                rendering it would claim the quota is exhausted. */}
+                            <span style={bodyStyle}>{status.credits.unlimited === true
+                              ? t('creditsTotalUnlimited')
+                              : t('creditsTotal', { total: formatNumber(status.credits.total) })}</span>
                           </div>
+                          {status.credits.cycleResetTime === undefined ? null : (
+                            <p style={descriptionStyle}>
+                              {t('cycleResetAt', { time: formatCycleReset(status.credits.cycleResetTime) })}
+                            </p>
+                          )}
                         </div>
                       )}
                       {status.creditsError === undefined ? null
@@ -937,13 +975,14 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
                         <div style={quotaListStyle}>
                           <h3 style={quotaTitleStyle}>{t('creditsDetailHeading')}</h3>
                           {status.credits.accounts
-                            .filter(account => account.remain > 0)
+                            .filter(account => account.packageName === 'enterprise' || account.remain > 0 || account.unlimited === true)
                             .map((account, index) => (
                             <CreditBar
                               key={`${account.packageName}-${String(index)}`}
-                              label={account.packageName}
+                              label={account.packageName === 'enterprise' ? t('packageEnterprise') : account.packageName}
                               remain={account.remain}
                               size={account.size}
+                              unlimited={account.unlimited}
                               t={t}
                             />
                           ))}

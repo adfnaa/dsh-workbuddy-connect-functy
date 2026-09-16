@@ -135,10 +135,16 @@ async function status(jsonOutput: boolean, variant: WorkBuddyVariant): Promise<n
     }
     return 1
   }
-  let credits: { total: number; error?: string } | undefined
+  let credits: { total: number; unlimited?: true; error?: string } | undefined
   try {
     const credential = await store.current()
-    if (credential !== undefined) credits = { total: (await client.fetchCredits(credential)).total }
+    if (credential !== undefined) {
+      const fetched = await client.fetchCredits(credential)
+      credits = {
+        total: fetched.total,
+        ...fetched.unlimited === true ? { unlimited: true } : {},
+      }
+    }
   } catch (error: unknown) {
     credits = { total: 0, error: safeMessage(error) }
   }
@@ -155,6 +161,7 @@ async function status(jsonOutput: boolean, variant: WorkBuddyVariant): Promise<n
       ...authStatus.domain === undefined || authStatus.domain === '' ? {} : { domain: authStatus.domain },
       source: authStatus.source,
       credits: credits?.total,
+      ...credits?.unlimited === true ? { creditsUnlimited: true } : {},
       ...credits?.error === undefined ? {} : { creditsError: credits.error },
       hostBundle: hostState,
     })
@@ -163,9 +170,13 @@ async function status(jsonOutput: boolean, variant: WorkBuddyVariant): Promise<n
   process.stdout.write([
     `${variant.displayName} Connect: signed in${authStatus.nickname === undefined ? '' : ` as ${authStatus.nickname}`}`,
     ...expiresAt === undefined ? [] : [`Access token expires ${expiresAt} (refresh is automatic)`],
-    credits?.error === undefined
-      ? `Remaining credit: ${credits?.total ?? 'unknown'}`
-      : `Remaining credit: unavailable (${credits.error})`,
+    credits?.error !== undefined
+      ? `Remaining credit: unavailable (${credits.error})`
+      // An uncapped quota has no balance to print; showing the placeholder 0
+      // would read as "exhausted".
+      : credits?.unlimited === true
+        ? 'Remaining credit: unlimited'
+        : `Remaining credit: ${credits?.total ?? 'unknown'}`,
     `Host bundle: ${hostAlive ? `running (pid ${heartbeat!.pid})` : hostState === 'stale' ? 'stale heartbeat (DSH process exited)' : 'not started in this profile'}`,
     'Client card: load failures are logged to the browser console only; the host provider is unaffected.',
     '',
