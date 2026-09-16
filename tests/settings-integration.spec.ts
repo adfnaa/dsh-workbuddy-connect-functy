@@ -76,17 +76,22 @@ describe('WorkBuddy Host settings integration', () => {
       return ctx
     }
     let ctx = await boot()
-    await ctx.settings.update('workbuddy-ai', { useMaximumContextWindow: true })
+    // Fresh profile, setting never touched: the default is on, so the model
+    // resolves at its largest declared window before any update is written.
+    expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')).context?.contextWindow).toBe(1_000_000)
     await ctx.fiber.dispose()
     ctx = await boot()
-    expect(ctx.settings.get('workbuddy-ai')).toMatchObject({ useMaximumContextWindow: true })
+    // Still on across a restart with nothing stored (schema default, not state).
     expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')).context?.contextWindow).toBe(1_000_000)
+    // An explicit opt-out must survive restarts: the flipped default may not
+    // resurrect the preference the user turned off.
     await ctx.settings.update('workbuddy-ai', { useMaximumContextWindow: false })
     await vi.waitFor(async () => {
       expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')).context?.contextWindow).toBe(300_000)
     })
     await ctx.fiber.dispose()
     ctx = await boot()
+    expect(ctx.settings.get('workbuddy-ai')).toMatchObject({ useMaximumContextWindow: false })
     expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')).context?.contextWindow).toBe(300_000)
   })
 
@@ -285,10 +290,13 @@ describe('WorkBuddy Host settings integration', () => {
     expect(ai).toContain('gpt-5.6-luna')
     expect(cn).not.toContain('gpt-5.6-luna')
 
-    expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')).context?.contextWindow).toBe(300_000)
-    await ctx.settings.update('workbuddy-ai', { useMaximumContextWindow: true })
+    // The preference is on by default: a profile that never touched the setting
+    // gets the largest declared window, and an explicit opt-out restores the
+    // upstream's own default.
+    expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')).context?.contextWindow).toBe(1_000_000)
+    await ctx.settings.update('workbuddy-ai', { useMaximumContextWindow: false })
     await vi.waitFor(async () => {
-      expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')).context?.contextWindow).toBe(1_000_000)
+      expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')).context?.contextWindow).toBe(300_000)
     })
   })
 

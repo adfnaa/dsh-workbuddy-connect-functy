@@ -232,8 +232,8 @@ const AUTH_FILE_AI_FIELD = z.string().description('WorkBuddy AI desktop auth fil
 /** Probe authorization (shared by the plugin schema and the CN section). */
 const PROBE_CONSENT_FIELD = z.boolean().default(false)
   .description('Authorize reasoning-effort probes (each probe sends real requests that may consume credit)')
-const MAXIMUM_CONTEXT_WINDOW_FIELD = z.boolean().default(false)
-  .description('Use the largest context window declared by WorkBuddy AI when alternatives are available')
+const MAXIMUM_CONTEXT_WINDOW_FIELD = z.boolean().default(true)
+  .description('Use the largest context window declared by WorkBuddy AI when alternatives are available (on by default)')
 
 export const Config: z<Config> = z.object({
   authFile: AUTH_FILE_FIELD,
