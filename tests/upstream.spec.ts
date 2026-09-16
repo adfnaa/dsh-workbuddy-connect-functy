@@ -358,6 +358,55 @@ describe('WorkBuddyUpstreamClient.fetchCredits (CN enterprise)', () => {
       .rejects.toThrow(/no recognised quota field/)
   })
 
+  it('throws when a limit arrives without any recognised usage field', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(enterpriseEnvelope({ limitNum: 500 }))))
+
+    // Defaulting the missing usage to 0 would render a confident "500 remaining"
+    // from a half-read response: the same wrong-but-plausible number the
+    // enterprise branch exists to prevent.
+    await expect(new WorkBuddyUpstreamClient().fetchCredits(ENTERPRISE))
+      .rejects.toThrow(/no recognised usage field/)
+  })
+
+  it('throws when the usage field is present but not a number', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(enterpriseEnvelope({ limitNum: 500, credit: '120' }))))
+
+    await expect(new WorkBuddyUpstreamClient().fetchCredits(ENTERPRISE))
+      .rejects.toThrow(/no recognised usage field/)
+  })
+
+  it('reports the received fields when the usage field is missing, without values', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(
+      enterpriseEnvelope({ limitNum: 500, secretUsed: 4242 }),
+    )))
+
+    const error = await new WorkBuddyUpstreamClient().fetchCredits(ENTERPRISE)
+      .then(() => undefined, (reason: unknown) => reason as Error)
+
+    expect(error?.message).toContain('secretUsed:number')
+    expect(error?.message).not.toContain('4242')
+  })
+
+  it('still accepts an explicit zero usage', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(enterpriseEnvelope({ limitNum: 500, credit: 0 }))))
+
+    // Zero used is a real reading and must not be mistaken for a missing field.
+    const credits = await new WorkBuddyUpstreamClient().fetchCredits(ENTERPRISE)
+
+    expect(credits.total).toBe(500)
+    expect(credits.unlimited).toBeUndefined()
+  })
+
+  it('does not require a usage field when the quota is uncapped', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(enterpriseEnvelope({ limitNum: -1 }))))
+
+    // An uncapped reading has no balance to subtract, so a missing used amount
+    // is not a parse failure here.
+    const credits = await new WorkBuddyUpstreamClient().fetchCredits(ENTERPRISE)
+
+    expect(credits.unlimited).toBe(true)
+  })
+
   it('names the received fields in that error, without their values', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(
       enterpriseEnvelope({ secretQuota: 998877, accountLabel: 'should-not-leak' }),

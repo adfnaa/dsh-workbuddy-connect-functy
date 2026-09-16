@@ -255,12 +255,13 @@ function CreditBar({ label, remain, size, unlimited, t }: {
           style={progressTrackStyle}
           role="progressbar"
           aria-label={label}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={100}
-        >
-          <div style={progressFillStyle(100)} />
-        </div>
+          /*
+           * "Uncapped" is not "100% remaining", so the range attributes are
+           * omitted and no fill is drawn: an uncapped quota has no proportion
+           * to state, and a full bar would assert one.
+           */
+          aria-valuetext={quotaText}
+        />
         <p style={bodyStyle}>{quotaText}</p>
       </div>
     )

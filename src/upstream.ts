@@ -788,13 +788,13 @@ export class WorkBuddyUpstreamClient {
     const numberAt = (source: Record<string, unknown>, key: string): number | undefined =>
       typeof source[key] === 'number' ? source[key] as number : undefined
     let limit: number | undefined
-    let used = 0
+    let used: number | undefined
     let resetTime: string | undefined
     for (const source of sources) {
       const candidate = numberAt(source, 'limitNum') ?? numberAt(source, 'limit_num')
       if (candidate === undefined) continue
       limit = candidate
-      used = numberAt(source, 'credit') ?? numberAt(source, 'used_num') ?? 0
+      used = numberAt(source, 'credit') ?? numberAt(source, 'used_num')
       if (typeof source['cycleResetTime'] === 'string' && source['cycleResetTime'] !== '') {
         resetTime = source['cycleResetTime'] as string
       }
@@ -804,7 +804,8 @@ export class WorkBuddyUpstreamClient {
       throw new Error(`workbuddy enterprise billing response carried no recognised quota field (expected limitNum/limit_num + credit/used_num; received ${describeShape(envelope.document)})`)
     }
     // `-1` is the upstream's "no cap" marker, not a balance. Carried as an
-    // explicit flag so no renderer can mistake it for a number.
+    // explicit flag so no renderer can mistake it for a number. The used amount
+    // is not part of an uncapped reading.
     if (limit === -1) {
       return {
         total: 0,
@@ -812,6 +813,13 @@ export class WorkBuddyUpstreamClient {
         unlimited: true,
         ...resetTime === undefined ? {} : { cycleResetTime: resetTime },
       }
+    }
+    // A limit with no usable amount must fail rather than assume zero used.
+    // Defaulting to 0 would render a confident "full quota remaining" from a
+    // response we could not read — the same species of wrong-but-plausible
+    // number as the bug this branch exists to fix.
+    if (used === undefined) {
+      throw new Error(`workbuddy enterprise billing response carried a quota limit but no recognised usage field (expected credit/used_num alongside limitNum/limit_num; received ${describeShape(envelope.document)})`)
     }
     let remain = limit - used
     if (remain < 0) remain = 0

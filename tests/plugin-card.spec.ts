@@ -303,4 +303,27 @@ describe('WorkBuddy plugin card', () => {
     expect(rendered).toContain(en.packageEnterprise)
     expect(rendered).toContain(en.unlimitedQuota)
   })
+
+  it('does not draw a full bar for an uncapped quota', async () => {
+    status()
+    statusBody.credits = {
+      total: 0,
+      unlimited: true,
+      accounts: [{ packageName: 'enterprise', remain: 0, size: 0, unlimited: true }],
+    }
+    await mount()
+    await press(en.tabDetails)
+
+    // "Uncapped" is not "100% remaining": asserting a proportion would be a
+    // claim the upstream never made, so no numeric value and no fill.
+    const bar = view!.root.findAll(node => node.props.role === 'progressbar'
+      && node.props['aria-label'] === en.packageEnterprise)[0]
+    expect(bar).toBeDefined()
+    expect(bar!.props['aria-valuenow']).toBeUndefined()
+    expect(bar!.props['aria-valuemin']).toBeUndefined()
+    expect(bar!.props['aria-valuemax']).toBeUndefined()
+    expect(bar!.props['aria-valuetext']).toBe(en.unlimitedQuota)
+    // The track renders no fill child, unlike a known percentage.
+    expect(bar!.children).toHaveLength(0)
+  })
 })
