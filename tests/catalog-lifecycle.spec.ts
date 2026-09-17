@@ -269,7 +269,7 @@ describe('catalog lifecycle', () => {
    * gone, fallback serving, source honestly 'fallback' with the error. Then the
    * next refresh succeeds and B's roster lands.
    */
-  it('manual refresh after an account switch drops the old account data even when it fails', async () => {
+  it('stops serving the old account after a switch even when the refresh fails, and restores it on return', async () => {
     const root = await tempDir()
     const cnFile = join(root, 'cn.info')
     await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-a'))
@@ -291,17 +291,19 @@ describe('catalog lifecycle', () => {
       reasoning: { supports: false, onlyReasoning: false, canDisableThinking: true },
     }
     await writeFile(join(root, '.workbuddy-probe.json'), JSON.stringify({
-      version: 1,
+      version: 2,
       records: {
-        'acct-a-model': {
-          fingerprint: fingerprintModel(liveRowA),
-          validation: 'validating',
-          efforts: ['low'],
-          probedAtMs: Date.now(),
-          pluginVersion: 'test',
-          // Observations are bound to the account that produced them; a record
-          // without this is refused by design, so this names account A.
-          account: 'uid-a:ent-1',
+        'uid-a:ent-1': {
+          'acct-a-model': {
+            fingerprint: fingerprintModel(liveRowA),
+            validation: 'validating',
+            efforts: ['low'],
+            probedAtMs: Date.now(),
+            pluginVersion: 'test',
+            // Observations are bound to the account that produced them; a record
+            // without this is refused by design, so this names account A.
+            account: 'uid-a:ent-1',
+          },
         },
       },
     }))
@@ -347,7 +349,8 @@ describe('catalog lifecycle', () => {
     expect(failed.status).toBe(200)
     expect(await failed.json()).toMatchObject({ state: 'failed' })
 
-    // The invariant: nothing of account A's survives a confirmed switch.
+    // The invariant: nothing of account A's is *served* under account B. Its
+    // observation survives on disk (keyed to A) but no read under B sees it.
     const after = await get('/plugins/dsh-workbuddy-connect/status')
     expect(after.probe.results).toEqual([])
     expect(after.catalog.source).toBe('fallback')
@@ -363,6 +366,18 @@ describe('catalog lifecycle', () => {
     expect(await ok.json()).toMatchObject({ state: 'refreshed' })
     await vi.waitFor(async () => {
       expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['acct-b-model'])
+    })
+
+    // And back to A: its roster and its recorded levels return without a fresh
+    // detection — the observation survived the round trip through account B.
+    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-a'))
+    rosterModel = 'acct-a-model'
+    const back = await post('/plugins/dsh-workbuddy-connect/probe', key, { action: 'refresh' })
+    expect(await back.json()).toMatchObject({ state: 'refreshed' })
+    await vi.waitFor(async () => {
+      const status = await get('/plugins/dsh-workbuddy-connect/status')
+      expect(status.probe.results.map((r: { id: string }) => r.id)).toContain('acct-a-model')
+      expect((await ctx.llm.listModels('workbuddy')).map(model => model.id)).toEqual(['acct-a-model'])
     })
   }, 45_000)
 })

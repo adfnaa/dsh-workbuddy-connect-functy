@@ -602,13 +602,12 @@ export function apply(ctx: Context, config: Config): void {
    * transition bumps {@link VariantRuntime.catalogGeneration}, which is what
    * makes an in-flight request from before the change refuse to write back.
    *
-   * Probe observations are dropped whenever the account actually changes —
-   * including sign-out, and including the "signed out, then in as someone else"
-   * sequence that used to look like a first sighting and let the new account
-   * inherit the old one's detected levels. They are deliberately NOT cleared on
-   * a first sign-in: no previous account's data could leak there, and clearing
-   * would delete records this very account owns (written before a restart, or
-   * seeded while all of this is running).
+   * Probe observations are kept across an account change: the store nests them
+   * per account, so the departing account's records simply stop being served
+   * (every read is account-scoped) and are found intact if that account
+   * returns. The "signed out, then in as someone else" sequence that used to
+   * look like a first sighting is still safe — a record only ever answers for
+   * the account stamped on it, so the new account inherits nothing.
    *
    * @param identity - the account now in effect, or `undefined` when signed out.
    */
@@ -619,12 +618,13 @@ export function apply(ctx: Context, config: Config): void {
     const hadCredential = known !== undefined
     if (identity === undefined) lastIdentities.delete(id)
     else lastIdentities.set(id, identity)
-    // Any change of identity invalidates in-flight work and recorded answers.
+    // Any change of identity invalidates in-flight work and the catalog it was
+    // serving; recorded probe answers stay on disk, keyed by account and
+    // re-judged on every read.
     runtime.catalogGeneration += 1
     runtime.inflightFetch?.controller.abort()
     runtime.inflightFetch = undefined
     if (hadCredential && known !== identity) {
-      runtime.probeStore.clear()
       runtime.invalidate()
     }
     if (identity === undefined) {

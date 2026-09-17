@@ -112,7 +112,7 @@ describe('WorkBuddyProbeStore', () => {
   it('reads a corrupt or foreign-version file as empty rather than throwing', () => {
     const { store, path } = tempStore()
     store.set('auto', store.record(fingerprintModel(AUTO), 'validating', ['low'], ACCOUNT))
-    expect(store.all()).toHaveProperty('auto')
+    expect(store.all()[ACCOUNT]).toHaveProperty('auto')
 
     // A format version this reader does not know must not be half-understood.
     const document = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
@@ -125,11 +125,55 @@ describe('WorkBuddyProbeStore', () => {
     expect(new WorkBuddyProbeStore({ path, pluginVersion: '9.9.9' }).all()).toEqual({})
   })
 
-  it('clears every record on request', () => {
+  it('reads the version-1 flat format as empty rather than half-understanding it', () => {
+    const { path } = tempStore()
+    // What v0.5.x used to write: one flat record per model, no account level.
+    writeFileSync(path, JSON.stringify({
+      version: 1,
+      records: {
+        auto: {
+          fingerprint: fingerprintModel(AUTO),
+          validation: 'validating',
+          efforts: ['low'],
+          probedAtMs: Date.now(),
+          pluginVersion: '9.9.9',
+          account: ACCOUNT,
+        },
+      },
+    }))
+    const reopened = new WorkBuddyProbeStore({ path, pluginVersion: '9.9.9' })
+    expect(reopened.get('auto', fingerprintModel(AUTO), ACCOUNT)).toBeUndefined()
+    expect(reopened.all()).toEqual({})
+  })
+
+  it('keeps each account\'s record isolated and recovers it after a switch back', () => {
+    const { store, path } = tempStore()
+    const fingerprint = fingerprintModel(AUTO)
+    const OTHER = 'uid-2:'
+    store.set('auto', store.record(fingerprint, 'validating', ['low'], ACCOUNT))
+
+    // The other account sees nothing of this one's...
+    expect(store.get('auto', fingerprint, OTHER)).toBeUndefined()
+    // ...and its own write does not clobber what this account recorded.
+    store.set('auto', store.record(fingerprint, 'validating', ['max'], OTHER))
+    expect(store.get('auto', fingerprint, ACCOUNT)?.efforts).toEqual(['low'])
+    expect(store.get('auto', fingerprint, OTHER)?.efforts).toEqual(['max'])
+
+    // A→B→A through a reopen, as a restart would see it.
+    const reopened = new WorkBuddyProbeStore({ path, pluginVersion: '9.9.9' })
+    expect(reopened.get('auto', fingerprint, OTHER)?.efforts).toEqual(['max'])
+    expect(reopened.get('auto', fingerprint, ACCOUNT)?.efforts).toEqual(['low'])
+  })
+
+  it('clears every record of every account on request', () => {
     const { store } = tempStore()
-    store.set('auto', store.record(fingerprintModel(AUTO), 'validating', ['low'], ACCOUNT))
+    const fingerprint = fingerprintModel(AUTO)
+    store.set('auto', store.record(fingerprint, 'validating', ['low'], ACCOUNT))
+    store.set('auto', store.record(fingerprint, 'validating', ['max'], 'uid-2:'))
     store.clear()
     expect(store.all()).toEqual({})
+    expect(store.get('auto', fingerprint, ACCOUNT)).toBeUndefined()
+    expect(store.get('auto', fingerprint, 'uid-2:')).toBeUndefined()
   })
 })
 
