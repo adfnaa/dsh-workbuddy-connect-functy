@@ -11,11 +11,16 @@ const PACKAGE_VERSION = JSON.parse(
 /** Build-time define map; `src/version.ts` reads `__DSH_WORKBUDDY_VERSION__`. */
 const VERSION_DEFINE = { __DSH_WORKBUDDY_VERSION__: JSON.stringify(PACKAGE_VERSION) }
 
+/**
+ * Modules the host loader provides, kept out of the browser bundle. The
+ * client's DSH imports are type-only today — they erase at build time, so the
+ * emitted bundle only requires React. The list is the guardrail that keeps a
+ * future value import `require`d from the host instead of inlined.
+ */
 const CLIENT_EXTERNALS = [
   'react',
   'react/jsx-runtime',
   '@deepseek-ai/cordis',
-  '@deepseek-ai/dsh-client-runtime/client',
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-locale/client',
 ] as const

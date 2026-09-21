@@ -487,7 +487,6 @@ async function startVariant(ctx: Context, runtime: VariantRuntime): Promise<bool
     return false
   }
 
-  let invalidate: (() => void) | undefined
   try {
     // Constructed only once the listener holds a port: the provider's models
     // read the shim origin at construction time.
@@ -500,7 +499,6 @@ async function startVariant(ctx: Context, runtime: VariantRuntime): Promise<bool
       resolveAttachments: () => ctx.get('attachments'),
       observe: modelId => probeService.recordFor(modelId),
     })
-    invalidate = workbuddy.invalidate
     runtime.invalidate = () => {
       workbuddy.invalidate()
       ctx.emit('llm/adapters-updated')
@@ -520,8 +518,9 @@ async function startVariant(ctx: Context, runtime: VariantRuntime): Promise<bool
         void shim.close()
       })
     } catch {
-      // The plugin was disposed during registration; release immediately — the
-      // plugin-level disposer already closed every shim.
+      // `ctx.effect` throws when the context is already disposed, so the
+      // disposer it would have registered never runs: release this variant's
+      // own registration (and its shim) here instead.
       releaseAdapter()
       void shim.close()
     }
