@@ -1,9 +1,7 @@
-/** WorkBuddy status card contributed to Harness Plugin configuration. */
+/** WorkBuddy status card rendered on the Plugins page's bundle configuration. */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import type {} from '@deepseek-ai/dsh-client-ui-settings-plugins/client'
 import { WORKBUDDY_AI_PROBE_PATH, WORKBUDDY_AI_STATUS_PATH, WORKBUDDY_PROBE_PATH, WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
 import type { WorkBuddyWebModelBadge, WorkBuddyWebProbeSection, WorkBuddyWebStatus } from '../status-paths.ts'
 import { isWorkBuddyWebStatus } from './status-document.ts'
@@ -57,10 +55,8 @@ export const AI_CARD_VARIANT: WorkBuddyCardVariant = {
 
 /** Both cards, in display order. */
 export const CARD_VARIANTS: readonly WorkBuddyCardVariant[] = [CN_CARD_VARIANT, AI_CARD_VARIANT]
-/** Props delivered by the Plugin configuration item slot. */
-export type WorkBuddyPluginCardProps =
-  PropsRuntime<'settings.plugin.item'>
-  & Partial<WorkBuddyPluginCardInjected>
+/** Props the card renders from: the copy it shows and which variant it is. */
+export type WorkBuddyPluginCardProps = Partial<WorkBuddyPluginCardInjected>
 
 const POLL_INTERVAL_MS = 60_000
 
@@ -825,7 +821,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
         : t('signedOut')
 
   return (
-    <li style={cardStyle}>
+    <div style={cardStyle}>
       <button
         type="button"
         style={headerStyle}
@@ -1012,6 +1008,6 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
             {status?.status === 'error' ? <p style={errorStyle}>{status.message}</p> : null}
           </div>
         : null}
-    </li>
+    </div>
   )
 }

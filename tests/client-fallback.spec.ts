@@ -2,9 +2,11 @@
 import { describe, expect, it, vi } from 'vitest'
 
 /**
- * The client entry degrades a slot-API breaking change (the rc.6→rc.7
- * `id`→`key` rename that caused the red "Failed to load plugins" banner)
- * to a console.error, so the host provider keeps working without a banner.
+ * The client entry degrades a slot-API breaking change — the rc.6→rc.7
+ * `id`→`key` rename, or the 0.1.6 move from `settings.plugin.item` to the
+ * Plugins page's `plugins.bundle.config`, both of which caused the red "Failed
+ * to load plugins" banner — to a console.error, so the host provider keeps
+ * working without a banner.
  *
  * We cannot import the real client entry (it pulls browser-only DSH client
  * packages); instead we replicate the exact try/catch shape from
@@ -22,14 +24,14 @@ describe('client card fallback', () => {
     const errors: unknown[] = []
     const spy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => { errors.push(args) })
 
-    // Simulate a DSH loader that throws on ctx.slots.inject (the rc.7
+    // Simulate a DSH loader that throws on ctx.slots.inject (the keyed-slot
     // "requires options.key" error). Loose `any` on purpose: we only test
     // the try/catch boundary, not the DSH client API types.
     const fakeCtx: any = {
       effect: () => {},
       locale: { register: () => () => {}, bind: () => () => '' },
       slots: {
-        inject: () => { throw new Error('keyed slot "settings.plugin.item" requires options.key') },
+        inject: () => { throw new Error('keyed slot "plugins.bundle.config" requires options.key') },
       },
     }
 
@@ -39,7 +41,7 @@ describe('client card fallback', () => {
         const namespace = 'settings.workbuddy'
         ctx.effect(() => ctx.locale.register(namespace, { zh: {}, en: {} }), 'dsh-workbuddy-connect: settings copy')
         const t = ctx.locale.bind(namespace)
-        ctx.slots.inject('settings.plugin.item', () => {
+        ctx.slots.inject('plugins.bundle.config', () => {
           throw new Error('not reached')
         })
         void t

@@ -95,7 +95,7 @@ describe('WorkBuddy Host settings integration', () => {
     expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')).context?.contextWindow).toBe(300_000)
   })
 
-  it('exposes the provider directory entry, the settings section, and the fallback model list', async () => {
+  it('exposes the settings section and the fallback model list', async () => {
     root = await mkdtemp(join(tmpdir(), 'dsh-workbuddy-connect-settings-'))
     vi.stubEnv('DSH_HOME', root)
     // This case asserts the CN fallback roster, which is served only to a
@@ -121,15 +121,15 @@ describe('WorkBuddy Host settings integration', () => {
     await vi.waitFor(() => {
       expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('workbuddy')
     })
-    expect(ctx.llm.listConfigurableProviders()).toContainEqual({
-      provider: 'workbuddy',
-      displayName: 'WorkBuddy',
-      settingsNs: 'workbuddy',
-      settingsPath: [],
-      declared: false,
-    })
+    // No configurable-provider directory entry by design: the Models settings
+    // page joins its rows on that registration, so omitting it keeps these
+    // providers off that page (its editor has no fields for them). The group
+    // still serves models through the adapter.
+    expect(ctx.llm.listConfigurableProviders().map(entry => entry.provider))
+      .not.toContain('workbuddy')
 
-    // The section is what the Models settings page joins on to render a card.
+    // The section still exists: it is what `settings.yaml` and the TUI
+    // `/settings` read `authFile` from, independent of the Models page.
     const descriptor = ctx.settings.describe().find(entry => entry.ns === WorkBuddy.WORKBUDDY_SETTINGS_NS)
     expect(descriptor).toBeDefined()
 
@@ -211,25 +211,22 @@ describe('WorkBuddy Host settings integration', () => {
       )
     })
 
-    // Each provider carries its own display name, which is the model group
-    // heading the picker renders — and its OWN settings namespace: the Models
-    // page resolves `settingsNs` against served sections, so a shared ns would
-    // render both providers onto one card.
-    expect(ctx.llm.listConfigurableProviders()).toEqual(expect.arrayContaining([
-      { provider: 'workbuddy', displayName: 'WorkBuddy', settingsNs: 'workbuddy', settingsPath: [], declared: false },
-      { provider: 'workbuddy-ai', displayName: 'WorkBuddy AI', settingsNs: 'workbuddy-ai', settingsPath: [], declared: false },
-    ]))
+    // Directory entries stay absent by design: the two providers serve models
+    // and own their settings sections, but the Models settings page must not
+    // list them as editable rows, so no configurable-provider entry is made.
+    const configurable = ctx.llm.listConfigurableProviders().map(entry => entry.provider)
+    expect(configurable).not.toContain('workbuddy')
+    expect(configurable).not.toContain('workbuddy-ai')
 
-    // THE DISPATCH CONTRACT. The Plugins tab renders a card by
-    // `renderSlot('settings.plugin.item', {}, { entryKey: ns })` for each
-    // namespace the Host serves, and skips an entry whose key names no served
-    // namespace — the tab builds its list from sections, never from the slot's
-    // registrations. A card whose variant id is not a served ns therefore
-    // registers but never renders, which is exactly the bug this pins: every
-    // variant id must be an installed section's namespace.
+    // THE SECTION CONTRACT. Each variant owns its own served settings section:
+    // these are what `settings.yaml` and the TUI `/settings` read `authFile`
+    // from, and each must keep its own fields. (The Plugins page card no longer
+    // rides on them — since DSH 0.1.6 it renders the bundle's single
+    // `plugins.bundle.config` entry, keyed by package name. The Models page no
+    // longer joins on them either: no configurable-provider entry is made.)
     const served = new Set(ctx.settings.describe().map(entry => entry.ns))
     for (const variant of WorkBuddy.WORKBUDDY_VARIANTS) {
-      expect(served, `card key "${variant.id}" must be a served settings namespace`).toContain(variant.id)
+      expect(served, `provider "${variant.id}" must own a served settings namespace`).toContain(variant.id)
     }
     expect(served).toContain(WorkBuddy.WORKBUDDY_AI_SETTINGS_NS)
 
@@ -325,11 +322,12 @@ describe('WorkBuddy Host settings integration', () => {
     })
     expect(await ctx.llm.listModels('workbuddy-ai')).toEqual([])
 
-    // The provider directory entry survives: the group is hidden by having no
-    // models, not by unregistering, so a later sign-in needs no restart.
-    expect(ctx.llm.listConfigurableProviders().map(entry => entry.provider))
+    // The provider is still registered: the group is hidden by having no
+    // models, not by unregistering the adapter, so a later sign-in needs no
+    // restart. (No configurable-provider directory entry is made, by design.)
+    expect(ctx.llm.listProviders().map(provider => provider.id))
       .toEqual(expect.arrayContaining(['workbuddy', 'workbuddy-ai']))
-    // And the settings card is still there to explain how to sign in.
+    // And the settings section is still there to explain how to sign in.
     expect(ctx.settings.describe().find(entry => entry.ns === WorkBuddy.WORKBUDDY_SETTINGS_NS)).toBeDefined()
   })
 

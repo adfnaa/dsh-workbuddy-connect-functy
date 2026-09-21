@@ -1156,15 +1156,14 @@ declare const inject: string[];
  */
 declare const WORKBUDDY_SETTINGS_NS: SettingsNamespace;
 /**
- * Settings namespace owning the international card's section.
+ * Settings namespace owning the international section.
  *
- * One namespace per card, not one shared: the settings Plugins tab dispatches a
- * card by rendering `settings.plugin.item` with `entryKey = ns` for each
- * namespace the Host serves, and skips an entry whose key names no served
- * namespace. With a single installed section, the international card registers
- * into the slot but is never rendered — the card list is built from the Host's
- * sections, not from the slot's entries. Each card therefore needs its own
- * installed section whose namespace equals the card's slot key.
+ * One namespace per variant, not one shared: each section owns only its own
+ * fields (`authFile` vs `authFileAI` and `useMaximumContextWindow`), and the
+ * sections are what `settings.yaml` and the TUI `/settings` read. The card no
+ * longer rides on them — since DSH 0.1.6 the Plugins page renders the bundle's
+ * single `plugins.bundle.config` entry, keyed by package name, so a namespace
+ * that names no section costs no card.
  */
 declare const WORKBUDDY_AI_SETTINGS_NS: SettingsNamespace;
 /** Plugin configuration. */

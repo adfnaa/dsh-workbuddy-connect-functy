@@ -154,15 +154,14 @@ export const inject = ['llm']
 export const WORKBUDDY_SETTINGS_NS = 'workbuddy' as SettingsNamespace
 
 /**
- * Settings namespace owning the international card's section.
+ * Settings namespace owning the international section.
  *
- * One namespace per card, not one shared: the settings Plugins tab dispatches a
- * card by rendering `settings.plugin.item` with `entryKey = ns` for each
- * namespace the Host serves, and skips an entry whose key names no served
- * namespace. With a single installed section, the international card registers
- * into the slot but is never rendered — the card list is built from the Host's
- * sections, not from the slot's entries. Each card therefore needs its own
- * installed section whose namespace equals the card's slot key.
+ * One namespace per variant, not one shared: each section owns only its own
+ * fields (`authFile` vs `authFileAI` and `useMaximumContextWindow`), and the
+ * sections are what `settings.yaml` and the TUI `/settings` read. The card no
+ * longer rides on them — since DSH 0.1.6 the Plugins page renders the bundle's
+ * single `plugins.bundle.config` entry, keyed by package name, so a namespace
+ * that names no section costs no card.
  */
 export const WORKBUDDY_AI_SETTINGS_NS = 'workbuddy-ai' as SettingsNamespace
 
@@ -243,13 +242,13 @@ export const Config: z<Config> = z.object({
 })
 
 /**
- * The CN card's settings section: only the fields that card edits.
+ * The CN side's settings section: only the fields that side edits.
  *
- * A section is what makes its namespace "served", which is what the Plugins
- * tab dispatches a card by — so the schema and the card must stay split the
- * same way. `probeConsent` lives here because it predates the second variant;
- * it gates no current code path (only manual, per-click-confirmed probes run),
- * so it is left where existing users set it rather than moved and re-asked.
+ * The section's namespace is what serves these fields to `settings.yaml` and
+ * the TUI `/settings`, and it keeps them apart from the international side's.
+ * `probeConsent` lives here because it predates the second variant; it gates no
+ * current code path (only manual, per-click-confirmed probes run), so it is left
+ * where existing users set it rather than moved and re-asked.
  */
 const CN_SECTION: z<Config> = z.object({
   authFile: AUTH_FILE_FIELD,
@@ -329,11 +328,6 @@ function credentialIdentity(credential: Pick<WorkBuddyCredential, 'uid' | 'enter
 /** Read the configured explicit auth-file path for one variant. */
 function configuredAuthFile(config: Config, variant: WorkBuddyVariant): string | undefined {
   return variant.id === CN_VARIANT.id ? config.authFile : config.authFileAI
-}
-
-/** The settings namespace a variant's card and provider directory entry use. */
-function settingsNamespaceFor(variant: WorkBuddyVariant): SettingsNamespace {
-  return variant.id === CN_VARIANT.id ? WORKBUDDY_SETTINGS_NS : WORKBUDDY_AI_SETTINGS_NS
 }
 
 /**
@@ -512,38 +506,23 @@ async function startVariant(ctx: Context, runtime: VariantRuntime): Promise<bool
       ctx.emit('llm/adapters-updated')
     }
 
-    let releaseAdapter: (() => void) | undefined
-    let releaseDirectory: (() => void) | undefined
-    try {
-      releaseAdapter = ctx.llm.registerAdapter([variant.id], workbuddy.adapter)
-      releaseDirectory = ctx.llm.registerConfigurableProviders([{
-        provider: variant.id,
-        displayName: variant.displayName,
-        // Each variant's directory entry joins its own installed section; the
-        // Models settings page resolves `settingsNs` against the served
-        // namespaces, so a shared ns would render both providers onto one card.
-        settingsNs: settingsNamespaceFor(variant),
-        settingsPath: [],
-        declared: false,
-      }])
-    } finally {
-      if (releaseAdapter === undefined || releaseDirectory === undefined) {
-        // Registration threw; release whichever half landed.
-        releaseAdapter?.()
-        releaseDirectory?.()
-      }
-    }
+    // Only the adapter registers. The plugin deliberately contributes NO
+    // `registerConfigurableProviders` directory entry: the Models settings page
+    // builds its rows from that registration, so omitting it keeps the WorkBuddy
+    // providers off that page (its editor has no fields to offer them) while the
+    // adapter keeps serving models and the sections keep serving `settings.yaml`
+    // and the TUI. A live route with no directory entry joins with an empty
+    // `settingsNs`, which the page reads as unconfigured and does not render.
+    const releaseAdapter = ctx.llm.registerAdapter([variant.id], workbuddy.adapter)
     try {
       ctx.effect(() => () => {
-        releaseAdapter?.()
-        releaseDirectory?.()
+        releaseAdapter()
         void shim.close()
       })
     } catch {
       // The plugin was disposed during registration; release immediately — the
       // plugin-level disposer already closed every shim.
-      releaseAdapter?.()
-      releaseDirectory?.()
+      releaseAdapter()
       void shim.close()
     }
     runtime.registered = true
@@ -726,12 +705,12 @@ export function apply(ctx: Context, config: Config): void {
   })
 
 
-  // Each settings section is what makes its namespace "served" — which is how
-  // both the Plugins tab (card dispatch) and the Models settings page (provider
-  // directory join) find this plugin's halves. One section per card, because the
-  // tab renders a card by `entryKey = ns` and never interprets one: a section
-  // that is not installed leaves its card registered but undispatched, and a
-  // provider whose `settingsNs` names no section joins nothing.
+  // Each settings section is what makes its namespace "served", which is how
+  // `settings.yaml` and the TUI `/settings` read this plugin's fields. One
+  // section per variant: each owns its own fields, so a shared namespace would
+  // collapse the two variants' distinct settings onto one. (The Models settings
+  // page does not join on these — the plugin registers no configurable-provider
+  // directory entry, so that page lists neither provider.)
   //
   // DSH 0.1.2 moved the helper from a free function (`installSettingsSection`)
   // onto the provider service (`settings.installSection`), so the wiring now has
