@@ -220,13 +220,17 @@ describe('WorkBuddy Host settings integration', () => {
 
     // THE SECTION CONTRACT. Each variant owns its own served settings section:
     // these are what `settings.yaml` and the TUI `/settings` read `authFile`
-    // from, and each must keep its own fields. (The Plugins page card no longer
-    // rides on them — since DSH 0.1.6 it renders the bundle's single
-    // `plugins.bundle.config` entry, keyed by package name. The Models page no
-    // longer joins on them either: no configurable-provider entry is made.)
+    // from, and each must keep its own fields. On DSH 0.1.5 they also anchor
+    // the card dispatch — the settings Plugins tab renders
+    // `settings.plugin.item` with `entryKey = ns` for each served namespace
+    // and skips a key that names no served ns, so every variant id must stay
+    // an installed section's namespace for the 0.1.5 cards to appear. (DSH
+    // 0.1.6+ ignores that pairing — its Plugins page renders the bundle's
+    // `plugins.bundle.config` entry by package name — and the Models page
+    // joins on neither: no configurable-provider entry is made.)
     const served = new Set(ctx.settings.describe().map(entry => entry.ns))
     for (const variant of WorkBuddy.WORKBUDDY_VARIANTS) {
-      expect(served, `provider "${variant.id}" must own a served settings namespace`).toContain(variant.id)
+      expect(served, `variant "${variant.id}" must own a served settings namespace (its 0.1.5 card key and its fields)`).toContain(variant.id)
     }
     expect(served).toContain(WorkBuddy.WORKBUDDY_AI_SETTINGS_NS)
 

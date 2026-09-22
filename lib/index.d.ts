@@ -1160,10 +1160,13 @@ declare const WORKBUDDY_SETTINGS_NS: SettingsNamespace;
  *
  * One namespace per variant, not one shared: each section owns only its own
  * fields (`authFile` vs `authFileAI` and `useMaximumContextWindow`), and the
- * sections are what `settings.yaml` and the TUI `/settings` read. The card no
- * longer rides on them — since DSH 0.1.6 the Plugins page renders the bundle's
- * single `plugins.bundle.config` entry, keyed by package name, so a namespace
- * that names no section costs no card.
+ * sections are what `settings.yaml` and the TUI `/settings` read. On DSH 0.1.5
+ * they carry one more duty — the settings Plugins tab dispatches a card by
+ * rendering `settings.plugin.item` with `entryKey = ns` for each namespace the
+ * Host serves, so each variant's card needs a served section whose namespace
+ * equals its id. DSH 0.1.6+ ignores that pairing (its Plugins page renders the
+ * bundle's single `plugins.bundle.config` entry, keyed by package name), which
+ * costs nothing: a section that names no card renders no duplicate.
  */
 declare const WORKBUDDY_AI_SETTINGS_NS: SettingsNamespace;
 /** Plugin configuration. */

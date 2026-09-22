@@ -24,7 +24,9 @@ const pageStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap
  * namespace, which is why the two variants used to be two cards — with the
  * Plugins page's `plugins.bundle.config`, keyed by the bundle's package name.
  * A bundle therefore carries exactly one configuration entry, so the cards are
- * stacked here instead of being dispatched separately.
+ * stacked here instead of being dispatched separately. (The 0.1.5 settings tab
+ * and its two dispatched cards still exist on 0.1.5 hosts; this page only
+ * mounts where the Plugins page declares its slot.)
  */
 export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): ReactNode {
   // Only `view: 'page'` is asked for on this slot today; the one-liner answer

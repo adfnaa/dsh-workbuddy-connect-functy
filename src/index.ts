@@ -158,10 +158,13 @@ export const WORKBUDDY_SETTINGS_NS = 'workbuddy' as SettingsNamespace
  *
  * One namespace per variant, not one shared: each section owns only its own
  * fields (`authFile` vs `authFileAI` and `useMaximumContextWindow`), and the
- * sections are what `settings.yaml` and the TUI `/settings` read. The card no
- * longer rides on them — since DSH 0.1.6 the Plugins page renders the bundle's
- * single `plugins.bundle.config` entry, keyed by package name, so a namespace
- * that names no section costs no card.
+ * sections are what `settings.yaml` and the TUI `/settings` read. On DSH 0.1.5
+ * they carry one more duty — the settings Plugins tab dispatches a card by
+ * rendering `settings.plugin.item` with `entryKey = ns` for each namespace the
+ * Host serves, so each variant's card needs a served section whose namespace
+ * equals its id. DSH 0.1.6+ ignores that pairing (its Plugins page renders the
+ * bundle's single `plugins.bundle.config` entry, keyed by package name), which
+ * costs nothing: a section that names no card renders no duplicate.
  */
 export const WORKBUDDY_AI_SETTINGS_NS = 'workbuddy-ai' as SettingsNamespace
 
@@ -505,12 +508,17 @@ async function startVariant(ctx: Context, runtime: VariantRuntime): Promise<bool
     }
 
     // Only the adapter registers. The plugin deliberately contributes NO
-    // `registerConfigurableProviders` directory entry: the Models settings page
-    // builds its rows from that registration, so omitting it keeps the WorkBuddy
-    // providers off that page (its editor has no fields to offer them) while the
-    // adapter keeps serving models and the sections keep serving `settings.yaml`
-    // and the TUI. A live route with no directory entry joins with an empty
-    // `settingsNs`, which the page reads as unconfigured and does not render.
+    // `registerConfigurableProviders` directory entry — on either DSH
+    // generation: the Models settings page (present since 0.1.2, joining the
+    // same way on 0.1.5 and 0.1.6) builds its rows from that registration, so
+    // omitting it keeps the WorkBuddy providers off that page (its editor has
+    // no fields to offer them) while the adapter keeps serving models and the
+    // sections keep serving `settings.yaml` and the TUI. A live route with no
+    // directory entry joins with an empty `settingsNs`, which every page reads
+    // as unconfigured and does not render. Nothing else consumes the
+    // directory: the model picker's group headings come from the adapter's own
+    // provider metadata and catalog, and `/model` resolves through the
+    // adapter, so both are unaffected.
     const releaseAdapter = ctx.llm.registerAdapter([variant.id], workbuddy.adapter)
     try {
       ctx.effect(() => () => {
@@ -705,11 +713,15 @@ export function apply(ctx: Context, config: Config): void {
 
 
   // Each settings section is what makes its namespace "served", which is how
-  // `settings.yaml` and the TUI `/settings` read this plugin's fields. One
-  // section per variant: each owns its own fields, so a shared namespace would
-  // collapse the two variants' distinct settings onto one. (The Models settings
-  // page does not join on these — the plugin registers no configurable-provider
-  // directory entry, so that page lists neither provider.)
+  // `settings.yaml` and the TUI `/settings` read this plugin's fields — and,
+  // on DSH 0.1.5, how the settings Plugins tab finds this plugin's cards (the
+  // tab dispatches `settings.plugin.item` by served namespace, one card per
+  // namespace, and never interprets one). One section per variant: each owns
+  // its own fields, so a shared namespace would collapse the two variants'
+  // distinct settings onto one — and on 0.1.5 their two cards onto one.
+  // (The Models settings page does not join on these on any version — the
+  // plugin registers no configurable-provider directory entry, so that page
+  // lists neither provider.)
   //
   // DSH 0.1.2 moved the helper from a free function (`installSettingsSection`)
   // onto the provider service (`settings.installSection`), so the wiring now has

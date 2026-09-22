@@ -1,4 +1,10 @@
-/** WorkBuddy status card rendered on the Plugins page's bundle configuration. */
+/**
+ * WorkBuddy status card, rendered on whichever settings surface the host
+ * provides: dispatched directly by DSH 0.1.5's settings Plugins tab (one card
+ * per variant), or mounted by the bundle configuration page DSH 0.1.6+'s
+ * Plugins page renders. The component itself is surface-agnostic — its props
+ * are only the injected copy and variant.
+ */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
@@ -821,6 +827,11 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
         : t('signedOut')
 
   return (
+    // A plain <div>, not the <li> the 0.1.5 tab's <ul> would suggest: that
+    // list is `display:flex; list-style:none` with no li-specific selectors,
+    // so a div child renders identically there, and the 0.1.6+ configuration
+    // page stacks the cards in its own flex column where an <li> would draw a
+    // stray list marker.
     <div style={cardStyle}>
       <button
         type="button"
