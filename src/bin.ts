@@ -66,6 +66,10 @@ async function doctor(jsonOutput: boolean, variant: WorkBuddyVariant): Promise<n
   const status = await store.status()
   const desktopPresent = await store.desktopFilePresent()
   const desktopFormat = await store.desktopAuthFormat()
+  // Name the file that was actually hit (e.g. the XDG data-home copy on
+  // UOS/deepin, issue #43), falling back to the first *possible* location
+  // when none exists so the hint still says where to point WORKBUDDY_AUTH_FILE.
+  const desktopPath = await store.resolvedDesktopAuthPath() ?? store.desktopAuthPath()
   const heartbeat = await readHostHeartbeat()
   const hostAlive = heartbeat !== undefined && isHeartbeatProcessAlive(heartbeat)
   // Only the international variant needs a UA, and reading it is how `doctor`
@@ -86,7 +90,7 @@ async function doctor(jsonOutput: boolean, variant: WorkBuddyVariant): Promise<n
     provider: variant.id,
     displayName: variant.displayName,
     desktopAuthFile: {
-      path: store.desktopAuthPath() ?? `(no platform default; set ${variant.env})`,
+      path: desktopPath ?? `(no platform default; set ${variant.env})`,
       present: desktopPresent,
       // How the file reads on disk: absent | plaintext | encrypted |
       // unrecognized. WorkBuddy 5.6 seals its token fields, so "encrypted"

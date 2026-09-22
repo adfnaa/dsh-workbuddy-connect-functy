@@ -494,10 +494,12 @@ export class WorkBuddyCredentialStore {
    *
    * Since WorkBuddy 5.6 the token fields may arrive in at-rest envelopes, so
    * the text is classified before the regular parser sees it. An encrypted
-   * document must be *opened*, never skipped: a decryption failure is a
-   * diagnosable error (helper missing, wrong key) that surfaces in status and
-   * chat instead of reading as "signed out" — and `current()` must not paper
-   * over it with a stale plugin-owned copy.
+   * document must be *opened*, never skipped; an unrecognized one must fail
+   * loudly. The desktop file, as long as it exists, is the identity
+   * authority — a document this plugin cannot read must surface as a
+   * diagnosis rather than be papered over by the plugin-owned copy, which
+   * belongs to whatever account was signed in when it was last refreshed.
+   * Only an absent (or empty) file lets the probe continue.
    */
   private async readDesktop(): Promise<WorkBuddyCredential | undefined> {
     for (const desktopPath of this.resolveDesktopCandidates()) {
@@ -510,7 +512,14 @@ export class WorkBuddyCredentialStore {
       }
       const classification = classifyDesktopAuthDocument(text)
       if (classification.format === 'plaintext') return parseWorkBuddyAuth(text)
-      if (classification.format !== 'encrypted') return undefined
+      if (classification.format === 'absent') continue
+      if (classification.format === 'unrecognized') {
+        throw new Error(
+          `the desktop auth file at ${desktopPath} exists but is unreadable`
+          + ' (neither a plaintext credential nor a decodable WorkBuddy 5.6 envelope);'
+          + ' fix or remove the file — it outranks the plugin-owned credential copy',
+        )
+      }
       return await this.openEncryptedDesktop(classification)
     }
     return undefined
@@ -537,10 +546,11 @@ export class WorkBuddyCredentialStore {
   }
 
   /**
-   * Classify the first existing desktop candidate's on-disk format; `absent`
-   * when no candidate exists. Diagnostics only — it never spawns the key
-   * helper and never decrypts, so doctor can describe the file without
-   * attempting the unlock.
+   * Classify the first desktop candidate that exists and carries content;
+   * `absent` when none does. An empty first file is skipped so it cannot mask
+   * a real document on the next candidate. Diagnostics only — it never spawns
+   * the key helper and never decrypts, so doctor can describe the file
+   * without attempting the unlock.
    */
   async desktopAuthFormat(): Promise<DesktopAuthFormat> {
     for (const desktopPath of this.resolveDesktopCandidates()) {
@@ -551,7 +561,8 @@ export class WorkBuddyCredentialStore {
         if (!isENOENT(error)) throw error
         continue
       }
-      return classifyDesktopAuthDocument(text).format
+      const format = classifyDesktopAuthDocument(text).format
+      if (format !== 'absent') return format
     }
     return 'absent'
   }
@@ -565,15 +576,26 @@ export class WorkBuddyCredentialStore {
     }
   }
 
-  /** Whether any desktop-file candidate exists as a regular file; diagnostics only. */
-  async desktopFilePresent(): Promise<boolean> {
+  /**
+   * The first desktop candidate that exists as a regular file — the one the
+   * probe would actually read; `undefined` when none does. Diagnostics only:
+   * unlike the probe it never parses or decrypts, so doctor can name the
+   * file that was hit (e.g. the XDG data-home copy on UOS/deepin, issue #43)
+   * instead of the first *possible* location.
+   */
+  async resolvedDesktopAuthPath(): Promise<string | undefined> {
     for (const desktopPath of this.resolveDesktopCandidates()) {
       try {
-        if ((await stat(desktopPath)).isFile()) return true
+        if ((await stat(desktopPath)).isFile()) return desktopPath
       } catch {
         // absent or not a regular file — try the next candidate
       }
     }
-    return false
+    return undefined
+  }
+
+  /** Whether any desktop-file candidate exists as a regular file; diagnostics only. */
+  async desktopFilePresent(): Promise<boolean> {
+    return await this.resolvedDesktopAuthPath() !== undefined
   }
 }

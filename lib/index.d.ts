@@ -834,22 +834,33 @@ declare class WorkBuddyCredentialStore {
    *
    * Since WorkBuddy 5.6 the token fields may arrive in at-rest envelopes, so
    * the text is classified before the regular parser sees it. An encrypted
-   * document must be *opened*, never skipped: a decryption failure is a
-   * diagnosable error (helper missing, wrong key) that surfaces in status and
-   * chat instead of reading as "signed out" — and `current()` must not paper
-   * over it with a stale plugin-owned copy.
+   * document must be *opened*, never skipped; an unrecognized one must fail
+   * loudly. The desktop file, as long as it exists, is the identity
+   * authority — a document this plugin cannot read must surface as a
+   * diagnosis rather than be papered over by the plugin-owned copy, which
+   * belongs to whatever account was signed in when it was last refreshed.
+   * Only an absent (or empty) file lets the probe continue.
    */
   private readDesktop;
   /** Open a 5.6 encrypted desktop document into the regular credential shape. */
   private openEncryptedDesktop;
   /**
-   * Classify the first existing desktop candidate's on-disk format; `absent`
-   * when no candidate exists. Diagnostics only — it never spawns the key
-   * helper and never decrypts, so doctor can describe the file without
-   * attempting the unlock.
+   * Classify the first desktop candidate that exists and carries content;
+   * `absent` when none does. An empty first file is skipped so it cannot mask
+   * a real document on the next candidate. Diagnostics only — it never spawns
+   * the key helper and never decrypts, so doctor can describe the file
+   * without attempting the unlock.
    */
   desktopAuthFormat(): Promise<DesktopAuthFormat>;
   private readOwn;
+  /**
+   * The first desktop candidate that exists as a regular file — the one the
+   * probe would actually read; `undefined` when none does. Diagnostics only:
+   * unlike the probe it never parses or decrypts, so doctor can name the
+   * file that was hit (e.g. the XDG data-home copy on UOS/deepin, issue #43)
+   * instead of the first *possible* location.
+   */
+  resolvedDesktopAuthPath(): Promise<string | undefined>;
   /** Whether any desktop-file candidate exists as a regular file; diagnostics only. */
   desktopFilePresent(): Promise<boolean>;
 }
@@ -859,10 +870,10 @@ declare class WorkBuddyCredentialStore {
 type WorkBuddyModelInfo = WorkBuddyUpstreamModel;
 /**
  * Static CLI models observed on the CN endpoint (re-verified against the live
- * `/v3/config` document 2026-09-23, including the thinking-effort, badge, and
- * billing metadata). The upstream refresh replaces this list at startup; it
- * exists so the provider registers with a usable catalog even while the first
- * fetch is in flight or offline.
+ * `/v3/config` document 2026-09-23, including the thinking-effort and billing
+ * metadata). The upstream refresh replaces this list at startup; it exists so
+ * the provider registers with a usable catalog even while the first fetch is
+ * in flight or offline.
  *
  * The list tracks the `cli` agent's model roster exactly — the 16 models it
  * offered that day. The roster churns quickly (`auto`, `kimi-k3-1`,
@@ -874,6 +885,13 @@ type WorkBuddyModelInfo = WorkBuddyUpstreamModel;
  * cannot drift apart silently. Reasoning metadata is verbatim from the live
  * document, and the `free` flag follows the normalized `x0.00` credits
  * marker.
+ *
+ * Deliberately NOT baked in: promotional badges. `限时免费` and friends are
+ * dynamic console-side promotions with no reliable validity window, so a
+ * static table would keep them alive long after the offers end. The live
+ * refresh merges the day's badges best-effort from the console document (see
+ * `fetchPromoBadges` in upstream.ts); until then the rows simply ship
+ * without them.
  */
 declare const FALLBACK_WORKBUDDY_MODELS: readonly WorkBuddyModelInfo[];
 /**

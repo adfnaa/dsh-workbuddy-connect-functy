@@ -557,15 +557,26 @@ describe('CN catalog: /v3/config roster, badge merge, and fallback consistency',
   })
 
   it('the static fallback equals the live parse of the day it was captured', () => {
-    // THE CONSISTENCY PIN: the fallback table must be exactly what the parser
-    // produces from the raw document the table was transcribed from — same
-    // membership, order, metadata, and badges. The one deliberate deviation is
-    // display-only: the fallback renames `hy3-x` (the document names both
-    // rows "Hy3"), which the parse cannot know to do.
+    // THE CONSISTENCY PIN: the fallback table must equal what the parser
+    // produces from the raw document the table was transcribed from, on every
+    // stable field — membership, order, metadata, credits, free flag.
+    // Promotional badges are the deliberate exception: they are dynamic
+    // console-side promotions, so they ride the live merge only and are
+    // stripped here before the comparison. (The other deviation is
+    // display-only: the fallback renames `hy3-x`, which the document names
+    // "Hy3", and the parse cannot know to do that.)
     const document = { models: LIVE_ROWS, agents: [{ name: 'cli', models: LIVE_ROSTER }] }
     const parsed = parseModelCatalog(document, false, CONSOLE_BADGES)
+    const stable = parsed.map(model => {
+      const { badges: _badges, ...billing } = model.billing ?? {}
+      return { ...model, billing }
+    })
     const fallback = FALLBACK_WORKBUDDY_MODELS.map(model => model.id === 'hy3-x' ? { ...model, name: 'Hy3' } : model)
-    expect(parsed).toEqual(fallback)
+    expect(stable).toEqual(fallback)
+    // The badges themselves stay live-only, never baked into the fallback.
+    expect(FALLBACK_WORKBUDDY_MODELS.every(model => model.billing?.badges === undefined)).toBe(true)
+    expect(parsed.filter(model => model.billing?.badges !== undefined).map(model => model.id).sort())
+      .toEqual(['deepseek-v4.1-flash', 'glm-5.2', 'hy3', 'hy4-preview'])
   })
 })
 

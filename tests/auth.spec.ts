@@ -10,7 +10,7 @@ import {
   WORKBUDDY_AUTH_FILE_ENV,
   type WorkBuddyCredential,
 } from '../src/auth.ts'
-import { AI_VARIANT } from '../src/variants.ts'
+import { AI_VARIANT, CN_VARIANT } from '../src/variants.ts'
 
 // node:os's ESM namespace rejects vi.spyOn (non-configurable), so homedir is
 // mocked at the module level; unset state falls through to the real one.
@@ -446,6 +446,32 @@ async function asLinux<T>(options: {
         refresh: async credential => ({ accessToken: credential.accessToken }),
       })
       expect(store.desktopAuthPath()).toBe('/explicit/ai-credential.info')
+    })
+  })
+
+  it('resolves the actually-hit path when only the data home carries the file', async () => {
+    // Issue #43 diagnostics: the first *candidate* is the config home, but
+    // when only the data-home copy exists, resolvedDesktopAuthPath() must
+    // name it — for both variants.
+    const root = await mkdtemp(join(tmpdir(), 'wb-xdg-resolved-'))
+    CLEANUP.push(() => rm(root, { recursive: true, force: true }))
+    const configHome = join(root, 'config')
+    const dataHome = join(root, 'data')
+    const dataAuth = join(dataHome, 'CodeBuddyExtension', 'Data', 'Public', 'auth')
+    await mkdir(dataAuth, { recursive: true })
+    await writeFile(join(dataAuth, 'workbuddy-desktop.info'), nestedDoc(Date.now() + 3600_000))
+    await writeFile(join(dataAuth, 'workbuddy-desktop-ai.info'), nestedDoc(Date.now() + 3600_000))
+    await asLinux({ home: '/home/alice', env: { XDG_CONFIG_HOME: configHome, XDG_DATA_HOME: dataHome } }, async () => {
+      for (const variant of [CN_VARIANT, AI_VARIANT]) {
+        const store = new WorkBuddyCredentialStore({
+          variant,
+          ownPath: join(root, `${variant.id}-own.json`),
+          refresh: async credential => ({ accessToken: credential.accessToken }),
+        })
+        await expect(store.resolvedDesktopAuthPath()).resolves.toBe(
+          join(dataAuth, variant.desktopFilename),
+        )
+      }
     })
   })
 

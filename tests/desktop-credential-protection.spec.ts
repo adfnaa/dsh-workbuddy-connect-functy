@@ -51,7 +51,11 @@ function referenceAad(keyId: string, context: { framing: 'file' | 'field', suite
   ])
 }
 
-/** Seal a field under the reference `file` framing, which openAuthField falls back to. */
+/**
+ * Seal a field under the reference `file` framing. Production must REJECT
+ * this — 5.6.x credential fields are `field`-framed only, and accepting other
+ * framings would be guessing at formats the plugin has never seen.
+ */
 function sealWithFileFraming(key: Buffer, plaintext: string): { '$wbEncrypted': 1, envelope: string } {
   const keyId = createHash('sha256').update(key).digest('hex').slice(0, 16)
   const nonce = Buffer.alloc(12, 3)
@@ -124,11 +128,12 @@ describe('desktop auth classification', () => {
 })
 
 describe('field decryption', () => {
-  it('builds the exact AAD the verified reference script builds', () => {
-    for (const framing of ['field', 'file'] as const) {
-      expect(buildAuthenticatedContextAad('9127dea1b44020a7', 1, framing))
-        .toEqual(referenceAad('9127dea1b44020a7', { framing, suite: 1 }))
-    }
+  it('builds the exact AAD the verified reference script builds for credential fields', () => {
+    // `field` framing is the only one 5.6.2 writes for credential fields; the
+    // reference builder's other framings belong to other document kinds and
+    // are deliberately not produced here.
+    expect(buildAuthenticatedContextAad('9127dea1b44020a7', 1))
+      .toEqual(referenceAad('9127dea1b44020a7', { framing: 'field', suite: 1 }))
   })
 
   it('round-trips a sealed field and rejects wrong keys or tampered tags', () => {
@@ -144,11 +149,22 @@ describe('field decryption', () => {
     expect(openAuthField(KEY, tampered)).toBeUndefined()
   })
 
-  it('opens an envelope sealed under the reference file framing via the fallback', () => {
+  it('rejects an envelope sealed under the file framing instead of guessing', () => {
+    // Production accepts exactly what 5.6.2 writes (field framing); the
+    // file-framed envelope of the same family must fail to open.
     const sealed = sealWithFileFraming(KEY, 'file-framed')
     const classified = classifyDesktopAuthDocument(JSON.stringify({ auth: { refreshToken: sealed } }))
     if (classified.format !== 'encrypted') throw new Error('fixture misclassified')
-    expect(openAuthField(KEY, classified.wrapped.fields[0]!.envelope)).toBe('file-framed')
+    expect(openAuthField(KEY, classified.wrapped.fields[0]!.envelope)).toBeUndefined()
+  })
+
+  it('classifies a wrapper with an unsupported suite as unrecognized, not encrypted', () => {
+    // Suite 1 is the only defined scheme; a future suite must read as a
+    // diagnosis, never as an openable envelope.
+    const keyId = createHash('sha256').update(KEY).digest('hex').slice(0, 16)
+    const inner = JSON.stringify({ suite: 2, keyId, nonce: Buffer.alloc(12, 1).toString('base64'), authTag: Buffer.alloc(16, 1).toString('base64'), ciphertext: Buffer.alloc(8, 1).toString('base64') })
+    const document = JSON.stringify({ auth: { accessToken: { '$wbEncrypted': 1, envelope: Buffer.from(inner, 'utf8').toString('base64') } } })
+    expect(classifyDesktopAuthDocument(document).format).toBe('unrecognized')
   })
 
   it('rebuilt plaintext keeps identity and expiry fields and drops the wrappers', () => {
@@ -329,6 +345,43 @@ describe('credential store with an encrypted desktop file', () => {
     const wrongKey = Buffer.alloc(32, 6)
     const store = makeStore(desktopPath, stubKeyProvider(wrongKey))
     await expect(store.current()).rejects.toThrow(/could not be decrypted/)
+  })
+
+  it('never falls back to a valid stale own copy when the desktop file is unreadable', async () => {
+    root = await mkdtemp(join(tmpdir(), 'wb-unrecognized-'))
+    cleanups.push(async () => { await rm(root, { recursive: true, force: true }) })
+    const ownDocument = JSON.stringify({
+      version: 1,
+      credential: {
+        accessToken: 'fresh-own-access', refreshToken: 'fresh-own-refresh',
+        expiresAtMs: Date.now() + 3_600_000, domain: 'www.workbuddy.ai',
+        uid: 'uid-current', nickname: 'Current', source: 'dsh',
+      },
+    })
+    // Case 1: a malformed (unparsable) desktop document.
+    const malformedPath = join(root, 'malformed.info')
+    await writeFile(malformedPath, '{ not json at all')
+    await writeFile(join(root, 'own.json'), ownDocument)
+    const malformedStore = makeStore(malformedPath, stubKeyProvider(KEY))
+    await expect(malformedStore.current()).rejects.toThrow(/exists but is unreadable/)
+    const malformedStatus = await malformedStore.status()
+    expect(malformedStatus.state).toBe('signed-out')
+    expect(malformedStatus.reason).toContain('exists but is unreadable')
+
+    // Case 2: a 5.6-style encrypted document with an unsupported suite —
+    // claimed by the wrapper format but not a format this plugin accepts.
+    const keyId = createHash('sha256').update(KEY).digest('hex').slice(0, 16)
+    const unsupported = JSON.stringify({
+      auth: { accessToken: { '$wbEncrypted': 1, envelope: Buffer.from(JSON.stringify({ suite: 2, keyId, nonce: Buffer.alloc(12, 1).toString('base64'), authTag: Buffer.alloc(16, 1).toString('base64'), ciphertext: Buffer.alloc(8, 1).toString('base64') }), 'utf8').toString('base64') } },
+      account: { uid: 'uid-9' },
+    })
+    const unsupportedPath = join(root, 'unsupported.info')
+    await writeFile(unsupportedPath, unsupported)
+    await writeFile(join(root, 'own.json'), ownDocument)
+    const unsupportedStore = makeStore(unsupportedPath, stubKeyProvider(KEY))
+    await expect(unsupportedStore.current()).rejects.toThrow(/exists but is unreadable/)
+    // The stale own credential must never surface through any read path.
+    await expect(unsupportedStore.resolve()).rejects.toThrow(/exists but is unreadable/)
   })
 
   it('lets the desktop file keep identity authority over a newer own copy', async () => {

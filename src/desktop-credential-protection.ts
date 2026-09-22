@@ -103,6 +103,11 @@ function parseWrappedField(field: 'accessToken' | 'refreshToken', value: unknown
   const ciphertext = parseBase64(parts['ciphertext'])
   if (nonce === undefined || authTag === undefined || ciphertext === undefined) return undefined
   if (typeof parts['suite'] !== 'number' || !Number.isInteger(parts['suite'])) return undefined
+  // Suite 1 is the only scheme WorkBuddy 5.6.x defines for credential fields.
+  // Anything else is a format this plugin has not seen, so the wrapper is not
+  // claimed as encrypted — the document then reads as unrecognized and the
+  // store reports a diagnosis instead of attempting a blind open.
+  if (parts['suite'] !== 1) return undefined
   if (typeof parts['keyId'] !== 'string' || !/^[0-9a-f]{16}$/u.test(parts['keyId'])) return undefined
   return {
     field,
@@ -190,18 +195,14 @@ export function unwrapDesktopAuthDocument(
 /**
  * The authenticated-context AAD for one field envelope, transcribed from the
  * app bundle's `buildAuthenticatedContextAad` and verified live against 5.6.2
- * (`docs/r3-final.js` holds the original). Credential fields use the `field`
- * framing; the `file` framing is kept only because the verification script
- * tried both and one future format may differ.
+ * (`docs/r3-final.js` in the working copy holds the original reference).
+ * Credential fields are always suite 1 under the `field` framing (WBEV1);
+ * the framing family's other members (WBEF1/WBER1/WBES1) belong to other
+ * document kinds and are deliberately not implemented — opening a field is
+ * not a place to guess at future formats.
  */
-export function buildAuthenticatedContextAad(
-  keyId: string,
-  suite: number,
-  framing: 'field' | 'file',
-): Buffer {
+export function buildAuthenticatedContextAad(keyId: string, suite: number): Buffer {
   const prefix = Buffer.from('WB-AAD\0', 'ascii')
-  const framingName = framing === 'field' ? 'WBEV1' : 'WBEF1'
-  const framingTag = framing === 'field' ? 2 : 1
   const lengthPrefixed = (value: string): Buffer => {
     const bytes = Buffer.from(value, 'utf8')
     const header = Buffer.allocUnsafe(4)
@@ -214,29 +215,31 @@ export function buildAuthenticatedContextAad(
   // reference script's default context.
   return Buffer.concat([
     prefix, Buffer.from([1]),
-    lengthPrefixed(framingName),
+    lengthPrefixed('WBEV1'),
     lengthPrefixed('sym-v1'),
     suiteBytes,
     lengthPrefixed(keyId),
-    Buffer.from([framingTag]),
+    Buffer.from([2]),
     Buffer.from([0]),
     Buffer.from([0]),
   ])
 }
 
-/** Open one envelope with a protector key; `undefined` when it will not open. */
+/**
+ * Open one envelope with a protector key; `undefined` when it will not open.
+ * The accepted format is exactly what WorkBuddy 5.6.2 writes — suite 1 under
+ * the `field` framing — so a failure means "not this format / wrong key",
+ * and is reported as such rather than retried against other framings.
+ */
 export function openAuthField(key: Buffer, envelope: WorkBuddyEnvelope): string | undefined {
-  for (const framing of ['field', 'file'] as const) {
-    try {
-      const decipher = createDecipheriv('aes-256-gcm', key, envelope.nonce, { authTagLength: 16 })
-      decipher.setAAD(buildAuthenticatedContextAad(envelope.keyId, envelope.suite, framing))
-      decipher.setAuthTag(envelope.authTag)
-      return Buffer.concat([decipher.update(envelope.ciphertext), decipher.final()]).toString('utf8')
-    } catch {
-      // Wrong framing or wrong key; try the next framing before giving up.
-    }
+  try {
+    const decipher = createDecipheriv('aes-256-gcm', key, envelope.nonce, { authTagLength: 16 })
+    decipher.setAAD(buildAuthenticatedContextAad(envelope.keyId, envelope.suite))
+    decipher.setAuthTag(envelope.authTag)
+    return Buffer.concat([decipher.update(envelope.ciphertext), decipher.final()]).toString('utf8')
+  } catch {
+    return undefined
   }
-  return undefined
 }
 
 /** Seal one field with the exact format `openAuthField` reads. Test helper. */
@@ -244,7 +247,7 @@ export function sealAuthFieldForTest(key: Buffer, plaintext: string, suite = 1):
   const keyId = createHash('sha256').update(key).digest('hex').slice(0, 16)
   const nonce = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', key, nonce, { authTagLength: 16 })
-  cipher.setAAD(buildAuthenticatedContextAad(keyId, suite, 'field'))
+  cipher.setAAD(buildAuthenticatedContextAad(keyId, suite))
   const ciphertext = Buffer.concat([cipher.update(Buffer.from(plaintext, 'utf8')), cipher.final()])
   const inner = {
     suite,

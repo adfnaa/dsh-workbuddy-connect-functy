@@ -145,10 +145,11 @@ describe('WorkBuddy Host settings integration', () => {
     // so both the /model popup and the composer seat show it; the id and the
     // request path are untouched by this display-only decoration.
     const byId = new Map(models.map(model => [model.id, model]))
-    // Since DSH 0.1.2 the composer seat renders the model name only, so both
-    // the billing rate and the declared promo badges ride the name itself;
-    // description stays untouched everywhere.
-    expect(byId.get('glm-5.2')?.name).toBe('GLM-5.2 · x0.79 · 夜间折扣')
+    // Since DSH 0.1.2 the composer seat renders the model name only, so the
+    // billing rate rides the name itself; description stays untouched
+    // everywhere. Promo badges are NOT baked into the static fallback — they
+    // are dynamic promotions that only a live refresh may attach.
+    expect(byId.get('glm-5.2')?.name).toBe('GLM-5.2 · x0.79')
     expect(byId.get('glm-5.1')?.name).toBe('GLM-5.1 · x0.79')
     expect(byId.get('glm-5v-turbo')?.name).toBe('GLM-5v-Turbo · x0.71')
     expect(byId.get('glm-5.2')?.description).toBeUndefined()

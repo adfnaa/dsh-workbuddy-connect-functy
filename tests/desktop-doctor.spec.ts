@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -17,9 +17,9 @@ import { deriveProtectorKey } from '../src/desktop-credential-protection.ts'
 const SECRET = Buffer.alloc(32, 7).toString('base64')
 const KEY = deriveProtectorKey(SECRET)
 
-function plaintextDocument(): string {
+function plaintextDocument(domain = 'copilot.tencent.com'): string {
   return JSON.stringify({
-    auth: { accessToken: 'at', refreshToken: 'rt', expiresAt: Date.now() + 3_600_000, domain: 'copilot.tencent.com' },
+    auth: { accessToken: 'at', refreshToken: 'rt', expiresAt: Date.now() + 3_600_000, domain },
     account: { uid: 'uid-1', nickname: 'nick' },
   })
 }
@@ -114,5 +114,38 @@ describe('doctor desktop auth format', () => {
     vi.stubEnv('WORKBUDDY_AUTH_FILE', brokenPath)
     const broken = await captureDoctor(['doctor', '--json'])
     expect((broken.json['desktopAuthFile'] as Record<string, unknown>)['format']).toBe('unrecognized')
+  })
+
+  it('reports the XDG data-home file as the desktop auth path when only it exists', async () => {
+    // Issue #43: the first *candidate* on Linux is the config home, but the
+    // file actually lives under the data home on UOS/deepin. Doctor must name
+    // the file that was really hit, for both variants.
+    root = await mkdtemp(join(tmpdir(), 'wb-doctor-xdg-'))
+    const configHome = join(root, 'config')
+    const dataAuth = join(root, 'data', 'CodeBuddyExtension', 'Data', 'Public', 'auth')
+    await mkdir(dataAuth, { recursive: true })
+    await writeFile(join(dataAuth, 'workbuddy-desktop.info'), plaintextDocument())
+    await writeFile(join(dataAuth, 'workbuddy-desktop-ai.info'), plaintextDocument('www.workbuddy.ai'))
+    const savedPlatform = process.platform
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
+    vi.stubEnv('DSH_HOME', join(root, 'dsh-home'))
+    vi.stubEnv('XDG_CONFIG_HOME', configHome)
+    vi.stubEnv('XDG_DATA_HOME', join(root, 'data'))
+    vi.stubEnv('WORKBUDDY_AUTH_FILE', '')
+    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', '')
+    try {
+      const cn = await captureDoctor(['doctor', '--json'])
+      expect((cn.json['desktopAuthFile'] as Record<string, unknown>)['path'])
+        .toBe(join(dataAuth, 'workbuddy-desktop.info'))
+      expect(cn.json['signIn']).toBe('signed-in')
+      expect(cn.code).toBe(0)
+
+      const ai = await captureDoctor(['doctor', '--json', '--provider', 'workbuddy-ai'])
+      expect((ai.json['desktopAuthFile'] as Record<string, unknown>)['path'])
+        .toBe(join(dataAuth, 'workbuddy-desktop-ai.info'))
+      expect(ai.json['signIn']).toBe('signed-in')
+    } finally {
+      Object.defineProperty(process, 'platform', { value: savedPlatform, configurable: true })
+    }
   })
 })
