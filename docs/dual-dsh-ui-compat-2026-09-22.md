@@ -91,7 +91,7 @@ Host 侧行为零改动：provider 注册、凭据生命周期、token refresh�
 | 0.1.7-alpha.1 真实宿主 | 同上 | 同上全绿 |
 | seam 无重复 | boot graph 对比 + npm 包源码 | 0.1.5 无 plugin-manager；0.1.6+ 的 settings-plugins 不再声明旧 slot → 各代恰渲染一个 seam |
 | Models 页行为 | 源码分析（§5） | 无 WorkBuddy 行、选择器/调用不受影响 |
-| **浏览器视觉确认** | **未做** | 卡片/配置页实际渲染、probe 检测按钮、context-window 开关——需真机浏览器 smoke（建议：社区桌面 2.0.9＝0.1.5-rc.1 内核查两张卡；web 升 0.1.6-alpha.2/0.1.7-alpha.1 查 Plugins 页） |
+| **浏览器视觉确认** | **部分完成（见 §11）** | 0.1.6-alpha.2 侧已在两个真实宿主上由浏览器实查通过：模型选择器分组、推理等级按钮、Plugins 面板配置页全渲染（9000/9001 双环境）；**0.1.5 侧（社区桌面两张卡）仍待真机确认** |
 
 另：官方 `apps/desktop`（Electron 壳包 Web UI、与 dsh 版本锁定发布、尚未公开分发）与本方案正交——双 seam 按 slot 存在性自适应，对任何携带任一 UI 的宿主成立。
 
@@ -160,3 +160,30 @@ Review 建议入手点：
 ### 10.7 文档同步（第二轮后的 editorial 修正）
 
 review 指出本文件 §4/§9 残留 3 处第一轮旧陈述与代码不符，已修正为当前状态并注明对应 §10 小节：§4 卡片根元素（`<div>` → `<li>`）、§4 ConfigPage 行（补充 `<ul>` 改动）、§4/§9 的 client-fallback spec（镜像体 → 真实 `apply()` 直测）、§9 的版本预置（0.6.0 已回退 0.5.4）。§4 表头同时补记第二轮提交号 `2e61e97`。纯文档修正，无代码变更。
+
+## 11. 浏览器实测（2026-09-23，0.1.6-alpha.2 双环境）
+
+第二轮修订后的构建（`2e61e97`，v0.5.4）在两个 0.1.6-alpha.2 真实宿主上做了浏览器实查，全部通过。
+
+### 11.1 环境与实测结果
+
+| 环境 | 构成 | 实查结果 |
+|---|---|---|
+| 9000（一次性 home） | core16 + 空 `DSH_HOME` + 本插件 link（用户人工确认） | 模型选择器含 WorkBuddy / WorkBuddy AI 分组；推理等级按钮可见 |
+| 9001（真实配置副本） | core16 + 用户真实 `~/.dsh` **完整副本**（settings.yaml、pi-ai providers、web profile 全套社区插件）+ 副本内 link 改指本仓库 | 详见下 |
+
+9001 实查明细（浏览器 DOM snapshot 逐项确认）：
+
+- **模型选择器分组齐全**：DeepSeek、Antigravity (agy CLI)、**WorkBuddy（16 模型）**、**WorkBuddy AI（22 模型）**、zai-coding-cn、minimax-token-plan、zen；徽章与倍率正常（`Hy3 · x0.00 · 限时免费`、`GLM-5.2 · x0.79 · 夜间折扣` 等）；当前默认模型即 WorkBuddy 的 `Deepseek-V4.1-Flash · x0.03 · 独家优惠`（来自用户 settings.yaml 的 agent-default-model）。
+- **推理等级按钮**（`conversation.input.right` seat）渲染正常，aria-label「检测 deepseek-v4.1-flash 可用的推理档位」。
+- **新 seam 配置页渲染正常**：左侧栏「插件」面板 → 已安装 → workbuddy-connect → 查看进入，`WorkBuddyConfigPage`（`plugins.bundle.config`）展示两个分区（DSH WorkBuddy Connect / DSH WorkBuddy AI Connect）；CN 卡片展开后含：账号状态（signed-in，昵称实时取自桌面 App）、令牌有效期（自动续期）、模型列表更新时间、状态/上下文窗口/积分详情三个标签、剩余积分合计（5,293）、12 个模型的推理档位检测按钮。版本显示 v0.5.4，组件 llm-workbuddy 运行中。
+- **host 侧**：两条 status 路由均 `signed-in` + `catalog.source: live`。
+
+### 11.2 实测发现的一个 UX 事实（已回写 README）
+
+0.1.6+ 的配置入口在**左侧栏「插件」面板 → 已安装 → workbuddy-connect → 查看**；设置弹窗里的「内置插件」页是只读部署清单（只有名称/启用状态/include 项，无配置入口），「模型」页则因目录卡片删除而不显示 WorkBuddy（§5，设计内）。用户实测时先后在「模型」页和「内置插件」页找不到入口，属于导航位置变化导致的误认，不是缺陷——但值得在 README 里写明，已更新 README.md / README.en.md 两处（「信息查看与检测」加 0.1.6+ 入口提示；「配置入口随 DSH 版本不同」改为精确路径并注明内置插件页无配置入口）。
+
+### 11.3 复现环境备注（一次性，测后可删）
+
+`/tmp/dsh-smoke/`：core15/16/17 三套 scratch 内核；home16（9000 用空 home）；home-real16（真实 home 的 rsync 副本，内含凭据副本，测完应 `rm -rf`）；web-9000.log / web-9001.log。真实 `~/.dsh` 全程未改动（副本内断链已修复为绝对路径，`profiles/web` 的插件 link 从用户开发目录改指本仓库）。9001 上 web profile 携带的社区插件（genui、dshmarket 等 12 个）在 0.1.6 内核下与本插件互不干扰，boot graph 同时含本插件与 plugin-manager 的 client.js。
+
