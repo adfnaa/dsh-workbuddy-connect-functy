@@ -253,25 +253,35 @@ describe('model visibility card controls', () => {
     expect(JSON.stringify(view!.toJSON())).not.toContain(en.visibilityIntro)
   })
 
-  it('a toggle in flight keeps the Refresh buttons idle; only the checkboxes lock', async () => {
+  it('a toggle in flight locks only its own row; the Refresh buttons stay idle', async () => {
+    // Regression 1: the visibility write used the card-wide `busy` flag, so
+    // every click relabelled 刷新/刷新模型列表 to "refreshing…". Regression 2: it
+    // then locked the whole checkbox list for one row's write, making every
+    // row blink grey. Writes are per-model and commutative, so only the row
+    // being written locks.
     holdPosts = true
     await mount()
     const boxes = view!.root.findAll(node => node.type === 'input'
       && (node.props as Record<string, unknown>)['type'] === 'checkbox')
-    const onChange = (boxes[0]!.props as Record<string, unknown>)['onChange'] as (event: unknown) => void
-    await act(async () => { onChange({ currentTarget: { checked: false } }) })
+    const onChange = (index: number) =>
+      (boxes[index]!.props as Record<string, unknown>)['onChange'] as (event: unknown) => void
+    await act(async () => { onChange(0)({ currentTarget: { checked: false } }) })
     // The write is held open: the buttons keep their idle labels, the context
-    // column stays rendered, and the checkboxes alone are locked.
+    // column stays rendered, and only the clicked row locks.
     expect(buttonLabels()).toContain(en.refresh)
     expect(buttonLabels()).toContain(en.refreshModels)
     expect(buttonLabels()).not.toContain(en.refreshing)
     expect(JSON.stringify(view!.toJSON())).toContain('1M')
-    expect(checkboxDisabled()).toEqual([true, true, true])
-    // Release the write; the box settles per the host's confirmation.
+    expect(checkboxDisabled()).toEqual([true, false, false])
+    // The untouched rows stay usable: a second write queues beside the first.
+    await act(async () => { onChange(2)({ currentTarget: { checked: false } }) })
+    expect(checkboxDisabled()).toEqual([true, false, true])
+    // Release both writes; the boxes settle per the host's confirmation.
     await act(async () => { for (const release of held.splice(0)) release() })
     await act(async () => { await new Promise(resolve => { setTimeout(resolve, 0) }) })
     expect(checkboxDisabled()).toEqual([false, false, false])
-    expect(checkboxStates()).toEqual([false, false, true])
+    expect(checkboxStates()).toEqual([false, false, false])
+    expect(posts.map(post => post.body['model'])).toEqual(['glm-5.3', 'no-context'])
   })
 
   it('refreshing re-reads the section, so an account switch swaps the whole list', async () => {

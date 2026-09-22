@@ -373,7 +373,7 @@ function ModelOfferRow({ model, t }: {
  * the default is the budget actually requested, while the larger value is a
  * ceiling the upstream would accept.
  */
-function ContextTable({ models, t, useMaximumContextWindow, contextPreferenceDisabled, onUseMaximumContextWindow, visibility, visibilityControlsDisabled, onVisibilityToggle }: {
+function ContextTable({ models, t, useMaximumContextWindow, contextPreferenceDisabled, onUseMaximumContextWindow, visibility, visibilityControlsDisabled, visibilityToggling, onVisibilityToggle }: {
   models: readonly WorkBuddyWebModelBadge[] | undefined
   t: WorkBuddyPluginCardInjected['t']
   useMaximumContextWindow?: boolean
@@ -382,8 +382,10 @@ function ContextTable({ models, t, useMaximumContextWindow, contextPreferenceDis
   onUseMaximumContextWindow?: (enabled: boolean) => void
   /** Per-account hidden-model state; undefined renders no checkboxes. */
   visibility: WorkBuddyWebVisibilitySection | undefined
-  /** Whether the per-model visibility checkboxes are locked (`busy || toggling`). */
+  /** Whether the visibility checkboxes are locked while other card actions run (`busy`). */
   visibilityControlsDisabled?: boolean
+  /** The models whose visibility writes are in flight; only those rows lock. */
+  visibilityToggling: ReadonlySet<string>
   onVisibilityToggle?: (modelId: string, visible: boolean) => void
 }): React.ReactNode {
   const rows = [...(models ?? [])].sort((a, b) => {
@@ -442,7 +444,7 @@ function ContextTable({ models, t, useMaximumContextWindow, contextPreferenceDis
                   <input
                     type="checkbox"
                     checked={!hidden.has(model.id)}
-                    disabled={visibilityControlsDisabled}
+                    disabled={visibilityControlsDisabled || visibilityToggling.has(model.id)}
                     onChange={event => { onVisibilityToggle?.(model.id, event.currentTarget.checked) }}
                   />
                 )}
@@ -658,12 +660,16 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
   const [readFailure, setReadFailure] = useState<string>()
   const [busy, setBusy] = useState(false)
   /**
-   * A visibility toggle in flight. Deliberately NOT the card-wide `busy`: that
-   * flag drives the Refresh buttons' labels, and a checkbox write must not
-   * make them claim a refresh the user never pressed. The checkboxes alone
-   * disable while a toggle is in flight; everything else stays live.
+   * The model ids whose visibility writes are in flight, empty when none are.
+   * Deliberately NOT the card-wide `busy` (that flag drives the Refresh
+   * buttons' labels, which must not claim a refresh the user never pressed)
+   * and deliberately per-row rather than whole-list: a visibility write only
+   * adds or removes one model's id, so the rows are independent — locking
+   * every checkbox for one row's write made the whole list visibly blink for
+   * no correctness gain. A set, because two writes can be open at once when
+   * the user moves down the list; only the rows being written lock.
    */
-  const [toggling, setToggling] = useState(false)
+  const [togglingModels, setTogglingModels] = useState<ReadonlySet<string>>(() => new Set())
   // Three tabs. Default is the live status plus the one action the card
   // carries; the two reference sets — context capacity, then rates and the
   // per-package breakdown — are deliberate visits, since neither changes while
@@ -833,11 +839,12 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
   const control = useCallback(async (action: { action: 'probe'; model: string } | { action: 'clear' } | { action: 'set-maximum-context-window'; enabled: boolean } | { action: 'set-model-visibility'; model: string; visible: boolean; account: string }): Promise<void> => {
     const key = status?.status === 'signed-in' ? status.probeKey : undefined
     if (key === undefined) return
-    // A visibility toggle runs on its own in-flight flag so the Refresh
-    // buttons keep their idle labels (see `toggling`); every other action
-    // keeps the card-wide `busy` those labels report.
+    // A visibility toggle runs on its own per-row in-flight set so the
+    // Refresh buttons keep their idle labels and the untouched rows stay
+    // clickable (see `togglingModels`); every other action keeps the card-wide
+    // `busy` those labels report.
     const visibility = action.action === 'set-model-visibility'
-    if (visibility) setToggling(true)
+    if (visibility) setTogglingModels(previous => new Set(previous).add(action.model))
     else setBusy(true)
     const controller = trackController()
     try {
@@ -887,7 +894,11 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
     } finally {
       manualControllers.current.delete(controller)
       if (!mounted.current) return
-      if (visibility) setToggling(false)
+      if (visibility) setTogglingModels(previous => {
+        const next = new Set(previous)
+        next.delete(action.model)
+        return next
+      })
       else setBusy(false)
     }
   }, [refresh, status, t, trackController, variant.probePath])
@@ -1063,7 +1074,8 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
                           ? { onUseMaximumContextWindow: (enabled: boolean) => { void control({ action: 'set-maximum-context-window', enabled }) } }
                           : {}}
                         visibility={status.visibility}
-                        visibilityControlsDisabled={busy || toggling}
+                        visibilityControlsDisabled={busy}
+                        visibilityToggling={togglingModels}
                         onVisibilityToggle={(modelId, visible) => {
                           // The expected-account guard: name the account these
                           // checkboxes were rendered from, so a write that

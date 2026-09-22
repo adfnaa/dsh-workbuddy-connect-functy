@@ -94,7 +94,7 @@ listModels() override（adapter.ts）：super 结果 - hidden(account) → 选�
 - **布局（2026-09-23 二次修订）**：visibility checkbox 已与 `ContextTable`（「上下文窗口」标签页）**合并为单一模型列表**——每个模型只渲染一行，checkbox 在左、模型名+费率居左、context window 靠右；不再有独立的「模型显示」长列表（首版实现曾上下两份列表，页面高度近翻倍，已按 review 修掉）。列表以**完整当前 catalog** 驱动（显隐针对全 catalog，与 context 元数据无关）：无 `contextWindow` 的模型照常渲染 checkbox，右侧显示 `—`；context 元数据只是行的附加信息。排序沿用原 ContextTable 规则——有窗口的模型按窗口从大到小，无窗口的稳定排在末尾（组内保持 catalog 顺序）。国际版「使用上游声明的最大上下文窗口」偏好保持在列表上方，与逐模型 checkbox 分属两个语义层级。Host 逻辑（store/adapter/路由/guard）在此轮 UI 重构中完全未改。
 - 数据流：卡片 GET status（携带非敏感的 `visibility: { account, disabled }` + 全量 models）→ 渲染勾选态；切换 POST probe 路由新动作 `{action:'set-model-visibility', model, visible, account}`（X-Workbuddy-Probe-Key 鉴权，与其余控制动作同 guards）；成功（`state:'updated'`）后卡片重读 status。**无乐观翻转**：勾选态永远来自 host 真相，保存失败时原因显示在旁、勾选不变（测试 G 组）。
 - **expected-account guard（review 修订，2026-09-23）**：动作里的 `account` 是卡片渲染勾选态时所在的账号键（来自 `visibility.account`），且为**必填**（缺失即 400，无兜底账号可假设）。宿主与当前 `runtime.account()` 不符 → 拒绝并返回 `state:'stale-account'`，不落盘。这堵住了账号切换窗口的竞态：卡片还显示 A 的列表、桌面已切到 B 时，A 的开关不会写进 B 的桶。卡片收到 `stale-account` 后立即重读（收敛到新账号的勾选态）并以本地化文案提示"登录账号已切换——本次修改未保存"。
-- **toggling 独立于卡片 busy（review 修订，2026-09-23）**：可见性开关用独立 in-flight 状态，不再借用卡片全局 `busy`——否则每次点 checkbox 都会把「刷新/刷新模型列表」按钮谎报成"正在刷新"。写入在途时只有 checkbox 锁定，其余控件不受影响。
+- **toggling 独立于卡片 busy（review 修订，2026-09-23）**：可见性开关用独立的**逐行** in-flight 状态（按 model id 的集合，支持并发写入各自记行），不再借用卡片全局 `busy`——否则每次点 checkbox 都会把「刷新/刷新模型列表」按钮谎报成"正在刷新"，且写入期间整列 checkbox 齐灰齐亮。写入在途时**只有被点的那一行锁定**，其余行可继续操作，其余控件不受影响。
 - 未登录：status 是 signed-out，卡片只显示登录提示，无控件可编辑。
 - 浏览器端不接触 accessToken/refreshToken；account 是非鉴权性的 `uid:enterpriseId`。
 
