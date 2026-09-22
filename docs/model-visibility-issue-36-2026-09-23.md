@@ -112,6 +112,11 @@ listModels() override（adapter.ts）：super 结果 - hidden(account) → 选�
 
 `pnpm run check`：typecheck ✓ / vitest 381/381 ✓ / build ✓；client bundle 仍仅 require react/jsx-runtime。
 
+**浏览器冒烟（2026-09-23，均通过）**：
+
+- **0.1.6-alpha.2**（9001，真实配置副本）：Plugins → workbuddy-connect → CN 卡片「上下文窗口」标签出现「模型显示」16 个 checkbox；取消勾选 Kimi-K3 → 磁盘文件记录该账号 `disabled:["kimi-k3-1"]`（0600）→ 模型选择器 WorkBuddy 组 16→15、Kimi-K3 消失（AI 组 22 不变）；重新勾选 → disabled 清空 → picker 恢复 16。
+- **0.1.5-rc.1**（9002，core15 + 同一副本）：设置 → 插件 → 两张卡原位 → CN 卡同标签页同控件；取消勾选 MiniMax-M3 → picker 16→15、MiniMax-M3 消失；恢复勾选 → 清空。两份 home 事后均回到空 accounts，AI 侧文件从未创建（未动 AI 的开关，桶清理语义正确）。
+
 ## 10. 已知限制
 
 - **真实多账号切换未人工验证**（只有一个登录账号可用）；A→B→A 的行为由测试 C 组 + adoptIdentity 生命周期覆盖，自动测试已覆盖，真实多账号切换尚未人工验证。
