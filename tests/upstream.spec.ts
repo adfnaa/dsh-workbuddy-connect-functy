@@ -148,6 +148,18 @@ describe('WorkBuddyUpstreamClient.fetchModels', () => {
     })
     expect(byId.get('m-plain')?.billing).toEqual({ free: false })
   })
+
+  it('judges `free` from the normalized multiplier, so `x0.00 credits` counts as free', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => fakeResponse(modelsEnvelope([
+      { id: 'm-suffix', name: 'Suffixed', maxInputTokens: 100_000, maxOutputTokens: 32_000, credits: 'x0.00 credits' },
+      { id: 'm-paid-suffix', name: 'Paid Suffixed', maxInputTokens: 100_000, maxOutputTokens: 32_000, credits: 'x0.79 credits' },
+    ], ['m-suffix', 'm-paid-suffix']))))
+
+    const models = await new WorkBuddyUpstreamClient().fetchModels(CREDENTIAL)
+    const byId = new Map(models.map(model => [model.id, model]))
+    expect(byId.get('m-suffix')?.billing).toEqual({ credits: 'x0.00 credits', free: true })
+    expect(byId.get('m-paid-suffix')?.billing).toEqual({ credits: 'x0.79 credits', free: false })
+  })
 })
 
 describe('WorkBuddyUpstreamClient.fetchCredits', () => {

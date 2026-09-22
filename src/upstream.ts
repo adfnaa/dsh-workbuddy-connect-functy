@@ -272,8 +272,11 @@ function resolveUpstreamBilling(wrapped: Record<string, unknown>): { billing: Wo
       if (label !== '') badges.push(label)
     }
   }
-  // A `x0.00` multiplier means the model is currently free.
-  const free = credits !== undefined && /^x?0\.0+$/u.test(credits)
+  // A `x0.00` multiplier means the model is currently free. Judge from the
+  // normalized multiplier: the raw string may carry a trailing unit word
+  // (`x0.00 credits`) that a bare-multiplier match would never see.
+  const multiplier = normalizeCredits(credits)
+  const free = multiplier !== undefined && /^x?0\.0+$/u.test(multiplier)
   return {
     billing: {
       ...credits === undefined ? {} : { credits },

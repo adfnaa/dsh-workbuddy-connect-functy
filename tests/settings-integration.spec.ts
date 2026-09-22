@@ -365,4 +365,43 @@ describe('WorkBuddy Host settings integration', () => {
     // cannot actually reach.
     expect(models).toEqual([])
   })
+
+  /**
+   * DSH 0.1.7 removed the provider-service section API this plugin's two
+   * settings sections are built on. Losing the API must degrade to a
+   * settings-less provider — providers and models still serve, no section is
+   * installed, and nothing throws — not take the plugin down mid-inject.
+   */
+  it('degrades without the installSection API while still serving models', async () => {
+    root = await mkdtemp(join(tmpdir(), 'dsh-workbuddy-connect-no-legacy-settings-'))
+    vi.stubEnv('DSH_HOME', root)
+    const aiFile = join(root, 'ai.info')
+    await writeFile(aiFile, credentialDocument('www.workbuddy.ai'))
+    vi.stubEnv('WORKBUDDY_AUTH_FILE', join(root, 'absent-cn.info'))
+    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', aiFile)
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline in tests') }))
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(MemorySettings)
+    // Simulate the 0.1.7 settings service: the 0.1.2-era section API is gone.
+    // (`installSection` is a prototype method on this provider, so a plain
+    // assignment — not `delete` — is what hides it.)
+    ;(ctx.settings as unknown as Record<string, unknown>)['installSection'] = undefined
+    await ctx.plugin(WorkBuddy, {})
+
+    // Both providers still register and the signed-in AI variant still serves
+    // its fallback catalog.
+    await vi.waitFor(() => {
+      expect(ctx.llm.listProviders().map(provider => provider.id))
+        .toEqual(expect.arrayContaining(['workbuddy', 'workbuddy-ai']))
+    })
+    await vi.waitFor(async () => {
+      expect((await ctx.llm.listModels('workbuddy-ai')).length).toBeGreaterThan(0)
+    })
+    // …and neither legacy section was installed.
+    const served = ctx.settings.describe().map(entry => entry.ns)
+    expect(served).not.toContain('workbuddy')
+    expect(served).not.toContain('workbuddy-ai')
+  })
 })

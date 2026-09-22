@@ -449,7 +449,18 @@ function ContextTable({ models, t, useMaximumContextWindow, contextPreferenceDis
                   />
                 )}
                 <span style={modelOfferStyle}>
-                  <span>{model.name}</span>
+                  {/*
+                    * Promo badges ride the name line and wrap below it when
+                    * they do not fit, exactly as the discount list renders
+                    * them; the row stays one line per model.
+                    */}
+                  <span style={modelBadgeStyle}>
+                    <span>{model.name}</span>
+                    {model.badges?.map(badge => (
+                      <span key={badge} style={modelBadgeChipStyle}>{modelBadgeLabel(badge, t)}</span>
+                    ))}
+                    {model.free === true ? <span style={modelBadgeChipStyle}>{t('freeModel')}</span> : null}
+                  </span>
                   {model.credits === undefined ? null
                     : <span style={modelRateStyle}>{model.credits}</span>}
                 </span>
@@ -494,8 +505,10 @@ function formatTokens(tokens: number): string {
  *   parameter ("this model does not check it"), never as a statement that a
  *   level is unsupported.
  */
-function ProbeSection({ probe, t, onDetect, onClear, busy }: {
+function ProbeSection({ probe, models, t, onDetect, onClear, busy }: {
   probe: WorkBuddyWebProbeSection
+  /** Catalog rows from the same status document, for candidate display names. */
+  models: readonly WorkBuddyWebModelBadge[] | undefined
   t: WorkBuddyPluginCardInjected['t']
   onDetect: (modelId: string) => void
   onClear: () => void
@@ -553,7 +566,10 @@ function ProbeSection({ probe, t, onDetect, onClear, busy }: {
           <div style={quotaGroupStyle}>
             {probe.candidates.map(id => {
               const result = probe.results.find(entry => entry.id === id)
-              const name = result?.name ?? id
+              // Display name: the catalog's own label first, then whatever the
+              // recorded probe stored, then the bare id. The *action* below
+              // keeps using the id regardless of what the name resolves to.
+              const name = models?.find(model => model.id === id)?.name ?? result?.name ?? id
               return (
                 <div key={id} style={modelOfferStyle}>
                   <div style={probeRowStyle}>
@@ -578,7 +594,7 @@ function ProbeSection({ probe, t, onDetect, onClear, busy }: {
                           * in-flight request, so it cannot pick the label.
                           */}
                         {runningModel === id
-                          ? t('probeRunning', { model: id })
+                          ? t('probeRunning', { model: name })
                           : t(result === undefined ? 'probeStart' : 'probeRedetect')}
                       </button>
                     </span>
@@ -1056,6 +1072,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
                       {status.probe === undefined ? null : (
                         <ProbeSection
                           probe={status.probe}
+                          models={status.models}
                           t={t}
                           busy={busy}
                           onDetect={confirmDetect}
@@ -1065,13 +1082,23 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
                     </div>
                   ) : tab === 'context' ? (
                     <div style={tabPanelStyle}>
+                      {/*
+                        * The document carries `useMaximumContextWindow` only
+                        * when the host can persist the preference, so its
+                        * presence is the capability signal: a 0.1.7 host (no
+                        * settings API) omits the field and this card renders
+                        * no preference control — not one whose click can only
+                        * report failure.
+                        */}
                       <ContextTable
                         models={status.models}
                         t={t}
                         contextPreferenceDisabled={busy}
-                        {...status.useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: status.useMaximumContextWindow }}
-                        {...variant.id === AI_CARD_VARIANT.id
-                          ? { onUseMaximumContextWindow: (enabled: boolean) => { void control({ action: 'set-maximum-context-window', enabled }) } }
+                        {...variant.id === AI_CARD_VARIANT.id && status.useMaximumContextWindow !== undefined
+                          ? {
+                            useMaximumContextWindow: status.useMaximumContextWindow,
+                            onUseMaximumContextWindow: (enabled: boolean) => { void control({ action: 'set-maximum-context-window', enabled }) },
+                          }
                           : {}}
                         visibility={status.visibility}
                         visibilityControlsDisabled={busy}

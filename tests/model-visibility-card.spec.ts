@@ -314,6 +314,9 @@ describe('model visibility card controls', () => {
   it('the international card keeps the maximum-context preference beside the model checkboxes', async () => {
     // The AI card renders both checkbox kinds: the whole-list preference on
     // top, then one per model row. They must not collapse into one group.
+    // The fixture carries the field because this host CAN persist the
+    // preference — its presence is what the card keys the control on.
+    signedIn({ useMaximumContextWindow: false })
     await mount(AI_CARD_VARIANT)
     const boxes = view!.root.findAll(node => node.type === 'input'
       && (node.props as Record<string, unknown>)['type'] === 'checkbox')
@@ -323,10 +326,35 @@ describe('model visibility card controls', () => {
     expect(rows).toHaveLength(4)
     expect(rows[0]).toContain(en.useMaximumContextWindow)
     // The model checkboxes still answer their own list, and a model toggle
-    // sends the visibility action — never the preference action. (The
-    // preference itself renders unchecked: the document states no value.)
+    // sends the visibility action — never the preference action.
     expect(checkboxStates()).toEqual([false, true, false, true])
     await toggle(2, true)
     expect(posts[0]!.body['action']).toBe('set-model-visibility')
+  })
+
+  it('a host that cannot persist the preference renders the rows but no maximum-context control', async () => {
+    // DSH 0.1.7 has no settings section API, so the status document carries no
+    // `useMaximumContextWindow` field. The card must degrade to NOT rendering
+    // the preference — not render one whose click can only report failure —
+    // while the context rows and visibility checkboxes keep working.
+    await mount(AI_CARD_VARIANT)
+    expect(checkboxStates()).toHaveLength(3)
+    expect(rowTexts().some(row => row.includes(en.useMaximumContextWindow))).toBe(false)
+    expect(rowTexts()).toHaveLength(3)
+  })
+
+  it('context rows carry promo badges and the free chip beside the name', async () => {
+    signedIn({
+      models: [
+        { id: 'glm-5.3', name: 'GLM-5.3', credits: 'x0.79', contextWindow: 1_000_000, defaultContextWindow: 300_000, maxContextWindow: 1_000_000, badges: ['夜间折扣'] },
+        { id: 'hy3', name: 'Hy3', credits: 'x0.00', contextWindow: 192_000, free: true },
+      ],
+    })
+    await mount()
+    const rows = rowTexts()
+    expect(rows[0]).toContain('GLM-5.3')
+    expect(rows[0]).toContain(en.badgeNightDiscount)
+    expect(rows[1]).toContain('Hy3')
+    expect(rows[1]).toContain(en.freeModel)
   })
 })

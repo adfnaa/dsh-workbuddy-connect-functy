@@ -633,6 +633,15 @@ export function apply(ctx: Context, config: Config): void {
   const probeKey = createProbeKey()
   let setMaximumContextWindow: ((enabled: boolean) => Promise<{ state: string; reason?: string }>) | undefined
   /**
+   * Whether this host's settings service carries the 0.1.2-era section API.
+   * Decided once, inside the `settings` inject: DSH 0.1.7 removed
+   * `installSection` (and `update`) with no replacement this plugin can drive.
+   * The maximum-context getter answers `undefined` while this is false, and a
+   * status document without the field is what keeps the card from rendering a
+   * checkbox that could not be saved.
+   */
+  let legacySettingsAvailable = false
+  /**
    * Point a variant at an account identity, invalidating whatever the previous
    * one left behind.
    *
@@ -730,7 +739,15 @@ export function apply(ctx: Context, config: Config): void {
             ? undefined
             : { account, disabled: runtime.visibilityStore.disabled(account) }
         },
-        ...runtime.variant.id === CN_VARIANT.id ? {} : { useMaximumContextWindow: () => current().useMaximumContextWindow === true },
+        ...runtime.variant.id === CN_VARIANT.id ? {} : {
+          // Presence of this field in the document is the card's capability
+          // signal, so the getter answers `undefined` — not merely `false` —
+          // on a host that cannot persist the preference. See
+          // {@link legacySettingsAvailable}.
+          useMaximumContextWindow: () => legacySettingsAvailable
+            ? current().useMaximumContextWindow === true
+            : undefined,
+        },
       })
       registerWorkBuddyProbeRoute(webCtx, {
         path: runtime.variant.probePath,
@@ -825,6 +842,20 @@ export function apply(ctx: Context, config: Config): void {
   // does. Without one the plugin still serves its models; it simply has no
   // user-editable sections, as before.
   ctx.inject(['settings'], settingsCtx => {
+    /*
+     * DSH 0.1.7 removed the provider-service section API (`installSection`,
+     * `update`) without a replacement this plugin can drive. Calling it there
+     * would throw mid-inject, so the API is feature-detected: 0.1.5 and 0.1.6
+     * install both legacy sections as before, while a 0.1.7 host degrades to a
+     * settings-less provider — provider, picker, visibility, and the context
+     * rows all keep working; only the two settings sections and the
+     * maximum-context preference are absent, and without an exception.
+     */
+    if (typeof settingsCtx.settings.installSection !== 'function') {
+      ctx.logger.warn('dsh-workbuddy-connect: host settings service has no installSection API; per-variant settings and the maximum-context preference are unavailable')
+      return
+    }
+    legacySettingsAvailable = true
     /** Section sources; each falls back to its own slice when its side unloads. */
     const sources: { cn: () => Config, ai: () => Config } = {
       cn: () => config,

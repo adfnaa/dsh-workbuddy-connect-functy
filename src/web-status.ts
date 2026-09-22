@@ -38,8 +38,13 @@ export interface WorkBuddyStatusRouteOptions {
   catalog?: () => WorkBuddyWebCatalog | undefined
   /** In-process key authorizing probe control writes. */
   probeKey?: string
-  /** International-card preference selecting larger declared context windows. */
-  useMaximumContextWindow?: () => boolean
+  /**
+   * International-card preference selecting larger declared context windows.
+   * The getter may answer `undefined` when this host cannot persist the
+   * preference (a 0.1.7 settings service has no section API): the field then
+   * stays out of the document, and the card renders no control for it.
+   */
+  useMaximumContextWindow?: () => boolean | undefined
   /**
    * Per-account hidden-model state for the card's visibility controls.
    * Undefined when the caller offers none (tests, headless profiles); a
@@ -167,14 +172,19 @@ export async function workBuddyWebStatus(
   // consent switches and results without a second request. The control key
   // travels with it: this response already passed the loopback guard, and the
   // key authorizes only probe control, never credentials or completions.
-  const probed: WorkBuddyWebStatus = deps.probe === undefined
-    ? statusWithModels
-    : {
+  let probed: WorkBuddyWebStatus = statusWithModels
+  if (deps.probe !== undefined) {
+    // The preference is offered only when the getter can answer a value; a
+    // host that cannot persist it answers `undefined` and the field stays out
+    // of this document, which is the card's signal not to render the control.
+    const maximumContextWindow = deps.useMaximumContextWindow?.()
+    probed = {
       ...statusWithModels,
       probe: deps.probe(),
       ...deps.probeKey === undefined ? {} : { probeKey: deps.probeKey },
-      ...deps.useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: deps.useMaximumContextWindow() },
+      ...maximumContextWindow === undefined ? {} : { useMaximumContextWindow: maximumContextWindow },
     }
+  }
   try {
     const credential = await deps.store.current()
     if (credential !== undefined) {
