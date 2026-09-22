@@ -68,7 +68,30 @@ WorkBuddy 中模型的推理档位信息目前分散在上游接口与客户端�
 | **0.2.6** | `0.1.1-rc.2`（旧线） | `2.0.3` / `2.0.4` |
 
 - **计划中的 `0.6.0` 不要求为了安装 WorkBuddy Connect 强制升级到 DSH `0.1.6`**：插件在加载时按宿主实际提供的配置入口自适应，`0.1.5` 与 `0.1.6+` 各自走各自的界面，互不干扰。
-- **配置入口随 DSH 版本不同**：DSH `0.1.5` 下仍是 设置 → 插件 里的「WorkBuddy」「WorkBuddy AI」两张卡片；DSH `0.1.6+` 的配置入口移到了**左侧栏「插件」面板 → 已安装 → workbuddy-connect → 查看**，两张卡片合并在该配置页里。注意：设置 → 内置插件 是只读的部署清单，那里没有配置入口，别找错地方。
+- **配置入口随 DSH 版本不同**，两代各就各位：
+
+  ```text
+  DSH 0.1.5 + 本插件
+  ├─ 设置 → 模型
+  │   └─ 不显示 WorkBuddy 两行 ← 与 0.1.6+ 统一（≤0.5.4 旧版插件才显示那两行旧 configurable-provider 条目）
+  ├─ 设置 → 插件
+  │   ├─ DSH WorkBuddy Connect      ✅ 配置卡片（国内版）
+  │   └─ DSH WorkBuddy AI Connect   ✅ 配置卡片（国际版）
+  └─ 聊天模型选择器
+      └─ WorkBuddy / WorkBuddy AI 分组 ✅
+
+  DSH 0.1.6+ + 本插件
+  ├─ 设置 → 模型
+  │   └─ 不显示 WorkBuddy 两行      ← 有意如此，两代行为统一
+  ├─ 设置 → 内置插件
+  │   └─ workbuddy-connect          ← 只读清单（运行状态），无配置入口，别找错地方
+  ├─ 主界面 → 插件 → workbuddy-connect → 查看
+  │   ├─ DSH WorkBuddy Connect      ✅ 新配置入口（国内版）
+  │   └─ DSH WorkBuddy AI Connect   ✅ 新配置入口（国际版）
+  └─ 聊天模型选择器
+      └─ WorkBuddy / WorkBuddy AI 分组 ✅
+  ```
+
 - 计划中的 `0.6.0` 起，Models 设置页不再显示 WorkBuddy / WorkBuddy AI 的不可编辑卡片（两代核心行为一致）；模型选择器、`/model` 与对话调用不受影响。
 - DSH `0.1.5` / `0.1.6` / `0.1.7` 的用户，待 `0.6.0` 发布后正常安装最新版即可：`dsh plugin --profile web add dsh-workbuddy-connect`
 - 还在用 DSH `0.1.2-rc.1` 的用户，请停留在 `0.3.1`：`dsh plugin --profile web add dsh-workbuddy-connect@0.3.1`

@@ -58,7 +58,31 @@ Prerequisite: the WorkBuddy desktop app is installed and signed in. The plugin r
 | **0.2.6** | `0.1.1-rc.2` (older line) | `2.0.3` / `2.0.4` |
 
 - **The planned `0.6.0` does not require upgrading to DSH `0.1.6` just to install WorkBuddy Connect**: the plugin adapts to whichever configuration surface the host actually provides at load time — `0.1.5` and `0.1.6+` each get their own UI, independently.
-- **Where the cards live depends on the DSH version**: on DSH `0.1.5` they stay in Settings → Plugins as the two cards 「WorkBuddy」 and 「WorkBuddy AI」; on DSH `0.1.6+` the entry moved to the **left sidebar Plugins panel → Installed → workbuddy-connect → View**, where both cards sit inside that configuration page. Note that Settings → Built-in Plugins is a read-only inventory list with no configuration entry — don't look for the cards there.
+- **Where the cards live depends on the DSH version** — each generation has its own place:
+
+  ```text
+  DSH 0.1.5 + this plugin
+  ├─ Settings → Models
+  │   └─ no WorkBuddy rows ← unified with 0.1.6+ (only plugins ≤0.5.4 still showed those old
+  │                            configurable-provider rows)
+  ├─ Settings → Plugins
+  │   ├─ DSH WorkBuddy Connect      ✅ config card (CN)
+  │   └─ DSH WorkBuddy AI Connect   ✅ config card (international)
+  └─ chat model picker
+      └─ WorkBuddy / WorkBuddy AI groups ✅
+
+  DSH 0.1.6+ + this plugin
+  ├─ Settings → Models
+  │   └─ no WorkBuddy rows          ← intentional, consistent across both generations
+  ├─ Settings → Built-in Plugins
+  │   └─ workbuddy-connect          ← read-only inventory (runtime status), no config entry
+  ├─ main UI → Plugins → workbuddy-connect → View
+  │   ├─ DSH WorkBuddy Connect      ✅ new config entry (CN)
+  │   └─ DSH WorkBuddy AI Connect   ✅ new config entry (international)
+  └─ chat model picker
+      └─ WorkBuddy / WorkBuddy AI groups ✅
+  ```
+
 - From the planned `0.6.0` on, the Models settings page no longer shows the non-editable WorkBuddy / WorkBuddy AI cards (consistent across both core generations); the model picker, `/model`, and chat calls are unaffected.
 - On DSH `0.1.5` / `0.1.6` / `0.1.7`, install the latest once `0.6.0` ships: `dsh plugin --profile web add dsh-workbuddy-connect`
 - Still on DSH `0.1.2-rc.1`? Stay on `0.3.1`: `dsh plugin --profile web add dsh-workbuddy-connect@0.3.1`
