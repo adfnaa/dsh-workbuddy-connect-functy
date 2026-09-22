@@ -3,22 +3,27 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AI_CARD_VARIANT, CN_CARD_VARIANT, WorkBuddyPluginCard } from '../src/client/WorkBuddyPluginCard.tsx'
 import { en } from '../src/client/locales.ts'
-import type { WorkBuddyModelInfo } from '../src/catalog.ts'
 
 /**
- * Issue #36 card wiring: the visibility checkboxes inside the shared
- * `WorkBuddyPluginCard`. Because both DSH surfaces (0.1.5 settings cards and
- * the 0.1.6+ bundle configuration page) mount this one component, these tests
- * cover the feature on both; the seam dispatch itself is pinned by
+ * Issue #36 card wiring, post-merge: the visibility checkboxes live inside the
+ * context-window table — one row per catalog model, checkbox and capacity on
+ * the same line — so the context tab no longer renders two model lists. Both
+ * DSH surfaces (0.1.5 settings cards and the 0.1.6+ bundle configuration page)
+ * mount this one component; the seam dispatch itself is pinned by
  * `slot-registration.spec.ts`. Host-side semantics (store, filter boundary,
  * routes) live in `tests/model-visibility.spec.ts`.
  */
 
-const MODELS: readonly WorkBuddyModelInfo[] = [
-  { id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 1_000, maxTokens: 32_000, supportsImages: true, billing: { free: false } },
-  { id: 'hy3', name: 'Hy3', contextWindow: 1_000, maxTokens: 32_000, supportsImages: true, billing: { free: false } },
-  { id: 'auto', name: 'Auto', contextWindow: 1_000, maxTokens: 32_000, supportsImages: true, billing: { free: false } },
-]
+/**
+ * Badges shaped like the status document's. GLM-5.3 declares a default and a
+ * larger maximum so the international preference can render; No Context
+ * declares no window at all and must still be toggleable.
+ */
+const MODELS = [
+  { id: 'glm-5.3', name: 'GLM-5.3', credits: 'x0.79', contextWindow: 1_000_000, defaultContextWindow: 300_000, maxContextWindow: 1_000_000 },
+  { id: 'hy3', name: 'Hy3', credits: 'x0.00', contextWindow: 192_000 },
+  { id: 'no-context', name: 'No Context', credits: 'x0.25' },
+] as const
 
 describe('model visibility card controls', () => {
   let view: ReactTestRenderer | undefined
@@ -40,7 +45,9 @@ describe('model visibility card controls', () => {
       status: 'signed-in',
       nickname: '昵称',
       probeKey: 'test-key',
-      models: MODELS.map(model => ({ id: model.id, name: model.name })),
+      // Verbatim badges: the merged table reads context and rate from the same
+      // rows the checkboxes live in.
+      models: MODELS.map(model => ({ ...model })),
       visibility: { account: 'u1:', disabled: ['hy3'] },
       catalog: { source: 'live', fetchedAt: Date.now() },
       ...overrides,
@@ -58,7 +65,7 @@ describe('model visibility card controls', () => {
       : [...new Set([...visibility.disabled, id])]
   }
 
-  /** The visibility checkboxes' checked states, in catalog order. */
+  /** The visibility checkboxes' checked states, in row order. */
   function checkboxStates(): boolean[] {
     return view!.root.findAll(node => {
       if (node.type !== 'input') return false
@@ -72,6 +79,43 @@ describe('model visibility card controls', () => {
       if (node.type !== 'input') return false
       return (node.props as Record<string, unknown>)['type'] === 'checkbox'
     }).map(node => (node.props as Record<string, unknown>)['disabled'] === true)
+  }
+
+  /**
+   * Plain text of one rendered subtree. Written by hand rather than
+   * `JSON.stringify(children)`: react-test-renderer instances hold fiber
+   * back-references, and stringifying them throws on the cycle.
+   */
+  function nodeText(node: { children: unknown[] }): string {
+    return node.children.map(child => {
+      if (typeof child === 'string' || typeof child === 'number') return String(child)
+      if (typeof child === 'object' && child !== null && Array.isArray((child as { children?: unknown[] }).children)) {
+        return nodeText(child as { children: unknown[] })
+      }
+      return ''
+    }).join('')
+  }
+
+  /**
+   * The merged model rows, as plain text: every <label> that renders a
+   * checkbox inside it (for the AI card the whole-list preference label counts
+   * too and comes first, rendered above the rows). One entry per row, so a
+   * duplicated list (the pre-merge bug) shows up as an extra entry.
+   */
+  function rowTexts(): string[] {
+    return view!.root.findAll(node => node.type === 'label' && nodeHasInput(node)).map(node => nodeText(node))
+  }
+
+  /** Whether a subtree renders an <input> anywhere inside it. */
+  function nodeHasInput(node: { children: unknown[] }): boolean {
+    for (const child of node.children) {
+      if (typeof child === 'object' && child !== null) {
+        const candidate = child as { type?: unknown; children?: unknown[] }
+        if (candidate.type === 'input') return true
+        if (Array.isArray(candidate.children) && nodeHasInput(candidate as { children: unknown[] })) return true
+      }
+    }
+    return false
   }
 
   /** Every button label currently rendered, for label-state assertions. */
@@ -135,10 +179,39 @@ describe('model visibility card controls', () => {
     vi.unstubAllGlobals()
   })
 
+  it('renders each model exactly once — no duplicated model list', async () => {
+    await mount()
+    const tree = JSON.stringify(view!.toJSON())
+    for (const name of ['GLM-5.3', 'Hy3', 'No Context']) {
+      // Split-count, not regex: the names contain dots and spaces.
+      expect(tree.split(name).length - 1).toBe(1)
+    }
+  })
+
+  it('carries the checkbox, name, and context value on one row', async () => {
+    await mount()
+    const rows = rowTexts()
+    expect(rows).toHaveLength(3)
+    // Largest window first, no-window model trailing (catalog order within groups).
+    expect(rows[0]).toContain('GLM-5.3')
+    expect(rows[0]).toContain('1M')
+    expect(rows[1]).toContain('Hy3')
+    expect(rows[1]).toContain('192K')
+    // No declared window: still a row, still a checkbox, an em dash for capacity.
+    expect(rows[2]).toContain('No Context')
+    expect(rows[2]).toContain('—')
+  })
+
   it('renders the checked state of the current account hidden list', async () => {
     await mount()
-    // Catalog order glm-5.3 / hy3 / auto; only hy3 is hidden for u1.
     expect(checkboxStates()).toEqual([true, false, true])
+  })
+
+  it('a model without a context window is still toggleable', async () => {
+    await mount()
+    await toggle(2, false)
+    expect(posts[0]!.body).toEqual({ action: 'set-model-visibility', model: 'no-context', visible: false, account: 'u1:' })
+    expect(checkboxStates()).toEqual([true, false, false])
   })
 
   it('unchecking sends the hide action and flips the box once the host confirms', async () => {
@@ -168,11 +241,51 @@ describe('model visibility card controls', () => {
     expect(JSON.stringify(view!.toJSON())).toContain('stable user id')
   })
 
+  it('renders no checkboxes when the account has no stable uid', async () => {
+    signedIn({ visibility: undefined })
+    await mount()
+    expect(checkboxStates()).toEqual([])
+    // The capacity list itself still renders, with the dash for the windowless.
+    const rows = rowTexts()
+    expect(rows).toHaveLength(0)
+    expect(JSON.stringify(view!.toJSON())).toContain('1M')
+    expect(JSON.stringify(view!.toJSON())).toContain('—')
+    expect(JSON.stringify(view!.toJSON())).not.toContain(en.visibilityIntro)
+  })
+
+  it('a toggle in flight keeps the Refresh buttons idle; only the checkboxes lock', async () => {
+    holdPosts = true
+    await mount()
+    const boxes = view!.root.findAll(node => node.type === 'input'
+      && (node.props as Record<string, unknown>)['type'] === 'checkbox')
+    const onChange = (boxes[0]!.props as Record<string, unknown>)['onChange'] as (event: unknown) => void
+    await act(async () => { onChange({ currentTarget: { checked: false } }) })
+    // The write is held open: the buttons keep their idle labels, the context
+    // column stays rendered, and the checkboxes alone are locked.
+    expect(buttonLabels()).toContain(en.refresh)
+    expect(buttonLabels()).toContain(en.refreshModels)
+    expect(buttonLabels()).not.toContain(en.refreshing)
+    expect(JSON.stringify(view!.toJSON())).toContain('1M')
+    expect(checkboxDisabled()).toEqual([true, true, true])
+    // Release the write; the box settles per the host's confirmation.
+    await act(async () => { for (const release of held.splice(0)) release() })
+    await act(async () => { await new Promise(resolve => { setTimeout(resolve, 0) }) })
+    expect(checkboxDisabled()).toEqual([false, false, false])
+    expect(checkboxStates()).toEqual([false, false, true])
+  })
+
+  it('refreshing re-reads the section, so an account switch swaps the whole list', async () => {
+    await mount()
+    expect(checkboxStates()).toEqual([true, false, true])
+    signedIn({ visibility: { account: 'u2:', disabled: [] } })
+    const refresh = view!.root.findAllByType('button').find(node => node.children.join('') === en.refresh)
+    if (refresh === undefined) throw new Error('refresh button not found')
+    await act(async () => { refresh.props.onClick() })
+    await act(async () => { await new Promise(resolve => { setTimeout(resolve, 0) }) })
+    expect(checkboxStates()).toEqual([true, true, true])
+  })
+
   it('a stale write after an account switch is refused, explained, and the list converges', async () => {
-    // The card rendered u1's checkboxes; the host adopted u2 before the click
-    // landed. The write must carry u1 as the expected account, be refused,
-    // explain itself in the user's language, and leave the checkboxes showing
-    // u2's own truth.
     await mount()
     expect(checkboxStates()).toEqual([true, false, true])
     // The host switches accounts after the card's last read: the GET now
@@ -188,51 +301,22 @@ describe('model visibility card controls', () => {
     expect(checkboxStates()).toEqual([true, true, true])
   })
 
-  it('renders no controls when the account has no stable uid', async () => {
-    signedIn({ visibility: undefined })
-    await mount()
-    expect(checkboxStates()).toEqual([])
-    expect(JSON.stringify(view!.toJSON())).not.toContain(en.visibilityHeading)
-  })
-
-  it('refreshing re-reads the section, so an account switch swaps the whole list', async () => {
-    await mount()
-    expect(checkboxStates()).toEqual([true, false, true])
-    // The sweep adopted account u2 (or the user pressed Refresh): the same GET
-    // now answers u2's section.
-    signedIn({ visibility: { account: 'u2:', disabled: [] } })
-    const refresh = view!.root.findAllByType('button').find(node => node.children.join('') === en.refresh)
-    if (refresh === undefined) throw new Error('refresh button not found')
-    await act(async () => { refresh.props.onClick() })
-    await act(async () => { await new Promise(resolve => { setTimeout(resolve, 0) }) })
-    expect(checkboxStates()).toEqual([true, true, true])
-  })
-
-  it('a toggle in flight keeps the Refresh buttons idle; only the checkboxes lock', async () => {
-    // Regression: the visibility write used the card-wide `busy` flag, so
-    // every checkbox click relabelled 刷新/刷新模型列表 to "refreshing…" —
-    // buttons the user never pressed. A toggle now runs on its own flag.
-    holdPosts = true
-    await mount()
+  it('the international card keeps the maximum-context preference beside the model checkboxes', async () => {
+    // The AI card renders both checkbox kinds: the whole-list preference on
+    // top, then one per model row. They must not collapse into one group.
+    await mount(AI_CARD_VARIANT)
     const boxes = view!.root.findAll(node => node.type === 'input'
       && (node.props as Record<string, unknown>)['type'] === 'checkbox')
-    const onChange = (boxes[0]!.props as Record<string, unknown>)['onChange'] as (event: unknown) => void
-    await act(async () => { onChange({ currentTarget: { checked: false } }) })
-    // The write is held open: the buttons keep their idle labels and stay
-    // enabled-reading, while the checkboxes alone are locked.
-    expect(buttonLabels()).toContain(en.refresh)
-    expect(buttonLabels()).toContain(en.refreshModels)
-    expect(buttonLabels()).not.toContain(en.refreshing)
-    expect(checkboxDisabled()).toEqual([true, true, true])
-    // Release the write; the box settles per the host's confirmation.
-    await act(async () => { for (const release of held.splice(0)) release() })
-    await act(async () => { await new Promise(resolve => { setTimeout(resolve, 0) }) })
-    expect(checkboxDisabled()).toEqual([false, false, false])
-    expect(checkboxStates()).toEqual([false, false, true])
-  })
-
-  it('the international card renders the same controls (shared component, both DSH surfaces)', async () => {
-    await mount(AI_CARD_VARIANT)
-    expect(checkboxStates()).toEqual([true, false, true])
+    // Preference first (rendered above the rows), then the three model rows.
+    expect(boxes).toHaveLength(4)
+    const rows = rowTexts()
+    expect(rows).toHaveLength(4)
+    expect(rows[0]).toContain(en.useMaximumContextWindow)
+    // The model checkboxes still answer their own list, and a model toggle
+    // sends the visibility action — never the preference action. (The
+    // preference itself renders unchecked: the document states no value.)
+    expect(checkboxStates()).toEqual([false, true, false, true])
+    await toggle(2, true)
+    expect(posts[0]!.body['action']).toBe('set-model-visibility')
   })
 })

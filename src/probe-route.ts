@@ -12,8 +12,11 @@
  *    process can write `Host: 127.0.0.1` — so a route that spends the user's
  *    credit must prove the caller was told the key.
  *
- * The route never accepts a prompt, a model id outside the live catalog, or a
- * sentinel from the browser: a probe request is assembled entirely host-side.
+ * A probe request is never accepted with a prompt, a model id outside the
+ * live catalog, or a sentinel from the browser: it is assembled entirely
+ * host-side. (Scope: the `probe` action only — `set-model-visibility`
+ * deliberately accepts a model id the current catalog no longer lists, since
+ * a hidden id is kept for when the model returns.)
  *
  * @module dsh-workbuddy-connect/probe-route
  */

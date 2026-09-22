@@ -127,11 +127,11 @@ export class WorkBuddyVisibilityStore {
   /**
    * Show or hide one model for one account, persisting before committing.
    *
-   * Hiding the last-hidden model removes the account's entry entirely — an
-   * absent entry and an empty list mean the same thing (everything visible),
-   * and the file should not accumulate empty buckets. Throws when the write
-   * fails, leaving the in-memory state untouched so a re-read cannot lie about
-   * what was persisted.
+   * Re-enabling (showing) the last hidden model removes the account's entry
+   * entirely — an absent entry and an empty list mean the same thing
+   * (everything visible), and the file should not accumulate empty buckets.
+   * Throws when the write fails, leaving the in-memory state untouched so a
+   * re-read cannot lie about what was persisted.
    */
   setVisible(account: string, model: string, visible: boolean): void {
     const current = this.load()[account]?.disabled ?? []

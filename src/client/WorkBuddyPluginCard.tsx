@@ -112,6 +112,12 @@ const modelOfferStyle: CSSProperties = { display: 'flex', flexDirection: 'column
 const modelRateStyle: CSSProperties = { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)' }
 const contextPreferenceStyle: CSSProperties = { display: 'flex', alignItems: 'flex-start', gap: 9, padding: '10px 12px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, color: 'var(--dsw-alias-label-primary)', fontSize: 13, lineHeight: '20px' }
 const contextPreferenceCopyStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 2 }
+/**
+ * Left half of one merged context/visibility row: the visibility checkbox (when
+ * the account has one) beside the model's name and rate. Kept as a flex span so
+ * the capacity column stays flush right no matter how long the name runs.
+ */
+const contextRowMainStyle: CSSProperties = { display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }
 const modelBadgeChipStyle: CSSProperties = {
   padding: '1px 8px', borderRadius: 999, fontSize: 11, lineHeight: '18px',
   background: 'var(--dsw-alias-state-success-subtle, rgba(34, 160, 107, 0.12))',
@@ -342,92 +348,71 @@ function ModelOfferRow({ model, t }: {
 }
 
 /**
- * Model-visibility controls (issue #36): one checkbox per catalog model.
+ * Context window and model visibility, one row per catalog model.
  *
- * Checked means the current account's picker may list the model; unchecking
- * adds it to that account's hidden list, re-checking removes it. The checkbox
- * state comes from the status document only — no optimistic flip — so a save
- * that fails leaves the box where the host's truth says it is, next to the
- * failure notice `control` records. Rendered only when the document carries a
- * visibility section (a signed-in account with a stable user id); a uid-less
- * credential shows no controls rather than editing a bucket every such
- * account would share.
- */
-function VisibilitySection({ models, visibility, t, busy, onToggle }: {
-  models: readonly WorkBuddyWebModelBadge[] | undefined
-  visibility: WorkBuddyWebVisibilitySection | undefined
-  t: WorkBuddyPluginCardInjected['t']
-  busy: boolean
-  onToggle: (modelId: string, visible: boolean) => void
-}): React.ReactNode {
-  if (visibility === undefined || models === undefined || models.length === 0) return null
-  const disabled = new Set(visibility.disabled)
-  return (
-    <div style={quotaListStyle}>
-      <h3 style={quotaTitleStyle}>{t('visibilityHeading')}</h3>
-      <p style={bodyStyle}>{t('visibilityIntro')}</p>
-      <div style={quotaGroupStyle}>
-        {models.map(model => (
-          <label key={model.id} style={contextPreferenceStyle}>
-            <input
-              type="checkbox"
-              checked={!disabled.has(model.id)}
-              disabled={busy}
-              onChange={event => { onToggle(model.id, event.currentTarget.checked) }}
-            />
-            <span style={contextPreferenceCopyStyle}>
-              <span>{model.name}</span>
-              {model.credits === undefined ? null
-                : <span style={modelRateStyle}>{model.credits}</span>}
-            </span>
-          </label>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-/**
- * Context capacity, listed in full.
+ * The list is driven by the full current catalog, not by context metadata:
+ * hiding a model is a statement about the picker, and a model without a
+ * declared window is still hideable — its row just shows an em dash where the
+ * capacity would be. Rows with a window keep the original ordering (largest
+ * first); rows without one trail at the end in catalog order.
  *
- * Every model the upstream reports a capacity for, largest first. A one-line
- * summary with the exceptions on hover was tried and rejected: capacity is
- * reference data you scan by model, and hiding most of it behind a hover made
- * the common case (a model you already have in mind) the hard one to look up.
+ * Each row is one <label>, so the checkbox is named by its row without a
+ * duplicated aria string. The checkbox state comes from the status document
+ * only — no optimistic flip — so a save that fails leaves the box where the
+ * host's truth says it is, next to the failure notice `control` records.
+ * Checkboxes render only when the document carries a visibility section (a
+ * signed-in account with a stable user id); a uid-less credential shows the
+ * plain capacity list rather than editing a bucket every such account would
+ * share.
  *
- * Purely a report of the upstream's own numbers. The plugin offers no tier
- * picker: the CN catalog declares one capacity per model and publishes no
- * alternatives, so a menu there would mean inventing client-side policy. The
- * international document does declare alternatives (`supportedLengths`), and
- * they are shown as a secondary figure rather than merged into one number —
+ * Purely a report of the upstream's own numbers otherwise. The plugin offers
+ * no tier picker: the CN catalog declares one capacity per model and publishes
+ * no alternatives, so a menu there would mean inventing client-side policy.
+ * The international document does declare alternatives (`supportedLengths`),
+ * and they are shown as a secondary figure rather than merged into one number —
  * the default is the budget actually requested, while the larger value is a
  * ceiling the upstream would accept.
  */
-function ContextTable({ models, t, useMaximumContextWindow, disabled, onUseMaximumContextWindow }: {
+function ContextTable({ models, t, useMaximumContextWindow, contextPreferenceDisabled, onUseMaximumContextWindow, visibility, visibilityControlsDisabled, onVisibilityToggle }: {
   models: readonly WorkBuddyWebModelBadge[] | undefined
   t: WorkBuddyPluginCardInjected['t']
   useMaximumContextWindow?: boolean
-  disabled?: boolean
+  /** Whether the maximum-context preference checkbox is locked (card `busy`). */
+  contextPreferenceDisabled?: boolean
   onUseMaximumContextWindow?: (enabled: boolean) => void
+  /** Per-account hidden-model state; undefined renders no checkboxes. */
+  visibility: WorkBuddyWebVisibilitySection | undefined
+  /** Whether the per-model visibility checkboxes are locked (`busy || toggling`). */
+  visibilityControlsDisabled?: boolean
+  onVisibilityToggle?: (modelId: string, visible: boolean) => void
 }): React.ReactNode {
-  const known = (models ?? [])
-    .filter(model => model.contextWindow !== undefined)
-    // Largest first: the big windows are the ones a user reaches for, and the
-    // small ones are then easy to spot at the end.
-    .sort((a, b) => (b.contextWindow as number) - (a.contextWindow as number))
-  const canSelectMaximum = known.some(model => model.maxContextWindow !== undefined
+  const rows = [...(models ?? [])].sort((a, b) => {
+    // Largest first, the ordering this table has always used; rows without a
+    // declared window trail at the end, keeping catalog order within the group
+    // (Array#sort is stable).
+    if (a.contextWindow === undefined) return b.contextWindow === undefined ? 0 : 1
+    if (b.contextWindow === undefined) return -1
+    return b.contextWindow - a.contextWindow
+  })
+  const canSelectMaximum = rows.some(model => model.maxContextWindow !== undefined
     && model.maxContextWindow > (model.defaultContextWindow ?? model.contextWindow ?? 0))
   const showPreference = onUseMaximumContextWindow !== undefined && (canSelectMaximum || useMaximumContextWindow === true)
-  if (known.length === 0 && !showPreference) return null
+  if (rows.length === 0 && !showPreference) return null
+  const hidden = new Set(visibility?.disabled ?? [])
   return (
     <div style={quotaListStyle}>
       <h3 style={quotaTitleStyle}>{t('contextHeading')}</h3>
+      {/*
+        * The preference is a policy about every row below it, not a row
+        * itself: it keeps its own bordered label and stays above the list, so
+        * the two checkbox kinds never read as one group.
+        */}
       {showPreference && onUseMaximumContextWindow !== undefined ? (
         <label style={contextPreferenceStyle}>
           <input
             type="checkbox"
             checked={useMaximumContextWindow === true}
-            disabled={disabled}
+            disabled={contextPreferenceDisabled}
             onChange={event => { onUseMaximumContextWindow(event.currentTarget.checked) }}
           />
           <span style={contextPreferenceCopyStyle}>
@@ -436,27 +421,51 @@ function ContextTable({ models, t, useMaximumContextWindow, disabled, onUseMaxim
           </span>
         </label>
       ) : null}
-      {known.map(model => {
-        const capacity = model.contextWindow as number
-        // Only shown when the upstream declared a larger alternative, so the
-        // CN list (which declares none) is unchanged.
-        const alternative = model.maxContextWindow !== undefined && model.maxContextWindow > capacity
-          ? model.maxContextWindow
-          : undefined
-        return (
-          <div key={model.id} style={quotaLabelStyle}>
-            <span>{model.name}</span>
-            <span style={modelOfferStyle}>
-              <span style={{ textAlign: 'right' }}>{formatTokens(capacity)}</span>
-              {alternative !== undefined
-                ? <span style={modelRateStyle}>{t('contextUpTo', { size: formatTokens(alternative) })}</span>
-                : model.defaultContextWindow !== undefined && model.defaultContextWindow < capacity
-                  ? <span style={modelRateStyle}>{t('contextDefault', { size: formatTokens(model.defaultContextWindow) })}</span>
-                  : null}
-            </span>
-          </div>
-        )
-      })}
+      {/*
+        * One line on what the checkboxes mean, only when they are rendered —
+        * a bare checkbox column with no explanation reads as selection, not
+        * visibility.
+        */}
+      {visibility === undefined ? null : <p style={bodyStyle}>{t('visibilityIntro')}</p>}
+      <div style={quotaGroupStyle}>
+        {rows.map(model => {
+          const capacity = model.contextWindow
+          // Only shown when the upstream declared a larger alternative, so the
+          // CN list (which declares none) is unchanged.
+          const alternative = capacity !== undefined && model.maxContextWindow !== undefined && model.maxContextWindow > capacity
+            ? model.maxContextWindow
+            : undefined
+          return (
+            <label key={model.id} style={quotaLabelStyle}>
+              <span style={contextRowMainStyle}>
+                {visibility === undefined ? null : (
+                  <input
+                    type="checkbox"
+                    checked={!hidden.has(model.id)}
+                    disabled={visibilityControlsDisabled}
+                    onChange={event => { onVisibilityToggle?.(model.id, event.currentTarget.checked) }}
+                  />
+                )}
+                <span style={modelOfferStyle}>
+                  <span>{model.name}</span>
+                  {model.credits === undefined ? null
+                    : <span style={modelRateStyle}>{model.credits}</span>}
+                </span>
+              </span>
+              <span style={modelOfferStyle}>
+                {capacity === undefined
+                  ? <span style={modelRateStyle} aria-label={t('contextUnknown')}>—</span>
+                  : <span style={{ textAlign: 'right' }}>{formatTokens(capacity)}</span>}
+                {alternative !== undefined
+                  ? <span style={modelRateStyle}>{t('contextUpTo', { size: formatTokens(alternative) })}</span>
+                  : capacity !== undefined && model.defaultContextWindow !== undefined && model.defaultContextWindow < capacity
+                    ? <span style={modelRateStyle}>{t('contextDefault', { size: formatTokens(model.defaultContextWindow) })}</span>
+                    : null}
+              </span>
+            </label>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -1045,12 +1054,17 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
                     </div>
                   ) : tab === 'context' ? (
                     <div style={tabPanelStyle}>
-                      <VisibilitySection
+                      <ContextTable
                         models={status.models}
-                        visibility={status.visibility}
                         t={t}
-                        busy={busy || toggling}
-                        onToggle={(modelId, visible) => {
+                        contextPreferenceDisabled={busy}
+                        {...status.useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: status.useMaximumContextWindow }}
+                        {...variant.id === AI_CARD_VARIANT.id
+                          ? { onUseMaximumContextWindow: (enabled: boolean) => { void control({ action: 'set-maximum-context-window', enabled }) } }
+                          : {}}
+                        visibility={status.visibility}
+                        visibilityControlsDisabled={busy || toggling}
+                        onVisibilityToggle={(modelId, visible) => {
                           // The expected-account guard: name the account these
                           // checkboxes were rendered from, so a write that
                           // races an account switch is refused host-side.
@@ -1061,15 +1075,6 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
                             account: status.visibility?.account ?? '',
                           })
                         }}
-                      />
-                      <ContextTable
-                        models={status.models}
-                        t={t}
-                        disabled={busy}
-                        {...status.useMaximumContextWindow === undefined ? {} : { useMaximumContextWindow: status.useMaximumContextWindow }}
-                        {...variant.id === AI_CARD_VARIANT.id
-                          ? { onUseMaximumContextWindow: (enabled: boolean) => { void control({ action: 'set-maximum-context-window', enabled }) } }
-                          : {}}
                       />
                     </div>
                   ) : (
