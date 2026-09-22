@@ -124,6 +124,17 @@ export interface WorkBuddyAdapterOptions {
    * upstream left undeclared; absent means declared-set-only behavior.
    */
   observe?: (modelId: string) => WorkBuddyProbeRecord | undefined
+  /**
+   * Model ids the current account has hidden from the picker, resolved per
+   * read so an account switch is honored without rebuilding the adapter.
+   *
+   * Hiding is a *listing* concern only: `buildModels()` keeps serving the full
+   * catalog because pi-ai's `resolveModel`/`prepareCall` resolve from the same
+   * snapshot `listModels` reads — filtering the descriptors there would make a
+   * hidden model unresolvable and break sessions already using it. The filter
+   * therefore lives in this adapter's `listModels` override alone.
+   */
+  hidden?: () => readonly string[]
 }
 
 /** What {@link createWorkBuddyAdapter} hands back. */
@@ -231,7 +242,7 @@ function toPiModel(info: WorkBuddyModelInfo, baseUrl: string, observed?: WorkBud
  * `modelErrors` since 0.1.5-alpha.2 (#12).
  */
 export function createWorkBuddyAdapter(options: WorkBuddyAdapterOptions): WorkBuddyAdapter {
-  const { shim, store, catalog, resolveAttachments, observe } = options
+  const { shim, store, catalog, resolveAttachments, observe, hidden } = options
   const providerId = options.providerId ?? WORKBUDDY_PROVIDER
   const displayName = options.displayName ?? 'WorkBuddy'
 
@@ -280,7 +291,7 @@ export function createWorkBuddyAdapter(options: WorkBuddyAdapterOptions): WorkBu
 
   let profiles = new Map<string, ResolvedPiAiProviderProfile>([[providerId, profile]])
 
-  const adapter = new WorkBuddyPiAiAdapter(catalog, {
+  const adapter = new WorkBuddyPiAiAdapter(catalog, hidden ?? (() => []), {
     profiles: () => profiles,
     auth: INERT_AUTH,
     // Resolve the shim's per-process shared secret as the OpenAI apiKey so
@@ -318,6 +329,7 @@ export function createWorkBuddyAdapter(options: WorkBuddyAdapterOptions): WorkBu
 class WorkBuddyPiAiAdapter extends PiAiAdapter {
   constructor(
     private readonly catalog: WorkBuddyCatalog,
+    private readonly hidden: () => readonly string[],
     options: ConstructorParameters<typeof PiAiAdapter>[0],
   ) {
     super(options)
@@ -330,10 +342,17 @@ class WorkBuddyPiAiAdapter extends PiAiAdapter {
 
   override async listModels(provider: string): Promise<readonly LlmModelInfo[]> {
     const models = await super.listModels(provider)
-    return models.map(model => {
+    // Resolved fresh per call: the picker reads this after every
+    // `llm/adapters-updated`, so an account switch or a toggle takes effect on
+    // the next read without rebuilding anything.
+    const hidden = new Set(this.hidden())
+    return models.flatMap(model => {
+      // Selectability only — `resolveModel` below deliberately does not apply
+      // this filter, so a session already using a hidden model keeps working.
+      if (hidden.has(model.id)) return []
       const info = this.infoFor(model.id)
-      if (info === undefined) return model
-      return { ...model, name: withCatalogDisplay(model.name, info) }
+      if (info === undefined) return [model]
+      return [{ ...model, name: withCatalogDisplay(model.name, info) }]
     })
   }
 

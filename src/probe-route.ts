@@ -50,6 +50,13 @@ export interface WorkBuddyProbeRouteOptions {
   /** Persist and apply the international context-window preference. */
   setMaximumContextWindow?: (enabled: boolean) => Promise<{ state: string; reason?: string }>
   /**
+   * Hide or show one model in the picker for the signed-in account. The
+   * handler refuses (with a reason, not a crash) when no account with a stable
+   * uid is in effect or the preference file cannot be written — a toggle the
+   * user pressed must never be reported as saved when it was not.
+   */
+  setModelVisibility?: (modelId: string, visible: boolean) => Promise<{ state: string; reason?: string }>
+  /**
    * Route path to mount. Defaults to the CN variant's path so existing callers
    * and tests keep their behaviour; the international variant passes its own.
    */
@@ -110,6 +117,12 @@ function parseAction(text: string): WorkBuddyProbeAction | undefined {
       ? { action: 'set-maximum-context-window', enabled: wrapped['enabled'] }
       : undefined
   }
+  if (action === 'set-model-visibility') {
+    const model = wrapped['model']
+    if (typeof model !== 'string' || model.trim() === '') return undefined
+    if (typeof wrapped['visible'] !== 'boolean') return undefined
+    return { action: 'set-model-visibility', model: model.trim(), visible: wrapped['visible'] }
+  }
   if (action === 'probe') {
     const model = wrapped['model']
     if (typeof model !== 'string' || model.trim() === '') return undefined
@@ -169,6 +182,14 @@ export function workBuddyProbeHandler(
           return
         }
         json(res, 200, await deps.setMaximumContextWindow(action.enabled === true))
+        return
+      }
+      if (action.action === 'set-model-visibility') {
+        if (deps.setModelVisibility === undefined) {
+          json(res, 404, { error: 'visibility-setting-not-supported' })
+          return
+        }
+        json(res, 200, await deps.setModelVisibility(action.model as string, action.visible === true))
         return
       }
       json(res, 200, await deps.probe(action.model as string))

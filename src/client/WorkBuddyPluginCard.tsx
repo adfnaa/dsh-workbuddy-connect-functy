@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { WORKBUDDY_AI_PROBE_PATH, WORKBUDDY_AI_STATUS_PATH, WORKBUDDY_PROBE_PATH, WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
-import type { WorkBuddyWebModelBadge, WorkBuddyWebProbeSection, WorkBuddyWebStatus } from '../status-paths.ts'
+import type { WorkBuddyWebModelBadge, WorkBuddyWebProbeSection, WorkBuddyWebStatus, WorkBuddyWebVisibilitySection } from '../status-paths.ts'
 import { isWorkBuddyWebStatus } from './status-document.ts'
 import type { WorkBuddySettingsKey } from './locales.ts'
 
@@ -337,6 +337,52 @@ function ModelOfferRow({ model, t }: {
         // silence here reads as "free", which is the claim being avoided.
         ? model.rateUnknown === true ? <span style={modelRateStyle}>{t('rateUnknown')}</span> : null
         : <span style={modelRateStyle}>{t('rate', { rate: model.credits })}</span>}
+    </div>
+  )
+}
+
+/**
+ * Model-visibility controls (issue #36): one checkbox per catalog model.
+ *
+ * Checked means the current account's picker may list the model; unchecking
+ * adds it to that account's hidden list, re-checking removes it. The checkbox
+ * state comes from the status document only — no optimistic flip — so a save
+ * that fails leaves the box where the host's truth says it is, next to the
+ * failure notice `control` records. Rendered only when the document carries a
+ * visibility section (a signed-in account with a stable user id); a uid-less
+ * credential shows no controls rather than editing a bucket every such
+ * account would share.
+ */
+function VisibilitySection({ models, visibility, t, busy, onToggle }: {
+  models: readonly WorkBuddyWebModelBadge[] | undefined
+  visibility: WorkBuddyWebVisibilitySection | undefined
+  t: WorkBuddyPluginCardInjected['t']
+  busy: boolean
+  onToggle: (modelId: string, visible: boolean) => void
+}): React.ReactNode {
+  if (visibility === undefined || models === undefined || models.length === 0) return null
+  const disabled = new Set(visibility.disabled)
+  return (
+    <div style={quotaListStyle}>
+      <h3 style={quotaTitleStyle}>{t('visibilityHeading')}</h3>
+      <p style={bodyStyle}>{t('visibilityIntro')}</p>
+      <div style={quotaGroupStyle}>
+        {models.map(model => (
+          <label key={model.id} style={contextPreferenceStyle}>
+            <input
+              type="checkbox"
+              checked={!disabled.has(model.id)}
+              disabled={busy}
+              onChange={event => { onToggle(model.id, event.currentTarget.checked) }}
+            />
+            <span style={contextPreferenceCopyStyle}>
+              <span>{model.name}</span>
+              {model.credits === undefined ? null
+                : <span style={modelRateStyle}>{model.credits}</span>}
+            </span>
+          </label>
+        ))}
+      </div>
     </div>
   )
 }
@@ -768,7 +814,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
    * the host never accepts a prompt, a sentinel, or a model outside its own
    * catalog from here.
    */
-  const control = useCallback(async (action: { action: 'probe'; model: string } | { action: 'clear' } | { action: 'set-maximum-context-window'; enabled: boolean }): Promise<void> => {
+  const control = useCallback(async (action: { action: 'probe'; model: string } | { action: 'clear' } | { action: 'set-maximum-context-window'; enabled: boolean } | { action: 'set-model-visibility'; model: string; visible: boolean }): Promise<void> => {
     const key = status?.status === 'signed-in' ? status.probeKey : undefined
     if (key === undefined) return
     setBusy(true)
@@ -776,7 +822,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
     try {
       const response = await fetch(variant.probePath, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Probe-Key': key },
+        headers: { 'Content-Type': 'application/json', 'X-Workbuddy-Probe-Key': key },
         credentials: 'same-origin',
         signal: controller.signal,
         body: JSON.stringify(action),
@@ -788,7 +834,11 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
           : `HTTP ${response.status}`
         throw new Error(message)
       }
-      if (action.action === 'set-maximum-context-window'
+      // Preference writes must confirm themselves: a `failed` state here means
+      // the host did not persist the toggle, and the checkbox must not be left
+      // claiming it did — the thrown reason lands beside the list and the
+      // document's next read restores the honest state.
+      if ((action.action === 'set-maximum-context-window' || action.action === 'set-model-visibility')
         && (typeof value !== 'object' || value === null || (value as Record<string, unknown>)['state'] !== 'updated')) {
         const reason = typeof value === 'object' && value !== null && 'reason' in value
           ? String((value as Record<string, unknown>)['reason'])
@@ -972,6 +1022,13 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
                     </div>
                   ) : tab === 'context' ? (
                     <div style={tabPanelStyle}>
+                      <VisibilitySection
+                        models={status.models}
+                        visibility={status.visibility}
+                        t={t}
+                        busy={busy}
+                        onToggle={(modelId, visible) => { void control({ action: 'set-model-visibility', model: modelId, visible }) }}
+                      />
                       <ContextTable
                         models={status.models}
                         t={t}

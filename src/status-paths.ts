@@ -52,16 +52,37 @@ export interface WorkBuddyProbeAction {
   /**
    * `probe` spends credit on one model; `clear` drops recorded observations;
    * `refresh` re-reads the credential and re-fetches the model catalog;
-   * `set-maximum-context-window` persists the international card preference.
+   * `set-maximum-context-window` persists the international card preference;
+   * `set-model-visibility` hides or shows one model for the signed-in
+   * account's picker.
    *
-   * All four are writes, which is why they share this route's in-process key
+   * All five are writes, which is why they share this route's in-process key
    * and loopback guards rather than the read-only status GET.
    */
-  action: 'probe' | 'clear' | 'refresh' | 'set-maximum-context-window'
-  /** Target model id; required for `probe`. */
+  action: 'probe' | 'clear' | 'refresh' | 'set-maximum-context-window' | 'set-model-visibility'
+  /** Target model id; required for `probe` and `set-model-visibility`. */
   model?: string
-  /** Requested value for `set-maximum-context-window`. */
+  /** Requested value for `set-maximum-context-window` and `set-model-visibility`. */
   enabled?: boolean
+  /** Requested picker visibility for `set-model-visibility`. */
+  visible?: boolean
+}
+
+/**
+ * Model-visibility section of the status document (issue #36).
+ *
+ * Present only when an account with a stable user id is signed in: the
+ * preferences are per account, so a credential without a uid has nothing to
+ * key them by and the card renders no visibility controls rather than editing
+ * a bucket every uid-less account would share. The account key is the same
+ * non-secret `uid:enterpriseId` identity the saved catalogs use — never a
+ * token.
+ */
+export interface WorkBuddyWebVisibilitySection {
+  /** The `uid:enterpriseId` identity these preferences belong to. */
+  account: string
+  /** Model ids this account has hidden from the picker (the full list, including ids not in the current catalog). */
+  disabled: readonly string[]
 }
 
 /**
@@ -179,6 +200,8 @@ export type WorkBuddyWebStatus =
     probe?: WorkBuddyWebProbeSection
     /** International-card preference selecting larger declared context windows. */
     useMaximumContextWindow?: boolean
+    /** Per-account hidden-model state for the card's visibility controls. */
+    visibility?: WorkBuddyWebVisibilitySection
     /**
      * In-process key authorizing probe control writes. Handed to the card with
      * the status document (the card is same-origin and already had to pass the

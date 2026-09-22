@@ -564,6 +564,15 @@ interface WorkBuddyVariant {
    * saved from one must never be served as the other's.
    */
   catalogFilename: string;
+  /**
+   * Basename of the plugin-owned per-account model-visibility file under
+   * `$DSH_HOME`.
+   *
+   * One per variant, for the same reason as the catalogs and probe records:
+   * the two endpoints share model ids, so one variant's hidden list must never
+   * answer for the other's picker.
+   */
+  visibilityFilename: string;
   /** Same-origin status route consumed by this variant's card. */
   statusPath: string;
   /** Same-origin probe-control route consumed by this variant's card. */
@@ -937,6 +946,17 @@ interface WorkBuddyAdapterOptions {
    * upstream left undeclared; absent means declared-set-only behavior.
    */
   observe?: (modelId: string) => WorkBuddyProbeRecord | undefined;
+  /**
+   * Model ids the current account has hidden from the picker, resolved per
+   * read so an account switch is honored without rebuilding the adapter.
+   *
+   * Hiding is a *listing* concern only: `buildModels()` keeps serving the full
+   * catalog because pi-ai's `resolveModel`/`prepareCall` resolve from the same
+   * snapshot `listModels` reads — filtering the descriptors there would make a
+   * hidden model unresolvable and break sessions already using it. The filter
+   * therefore lives in this adapter's `listModels` override alone.
+   */
+  hidden?: () => readonly string[];
 }
 /** What {@link createWorkBuddyAdapter} hands back. */
 interface WorkBuddyAdapter {
@@ -1005,6 +1025,73 @@ declare class WorkBuddyCatalogStore {
   set(account: string, catalog: Omit<SavedCatalog, 'account'>): void;
   /** Forget one account's catalog — used when that account signs out. */
   delete(account: string): void;
+  private persist;
+}
+//#endregion
+//#region src/visibility-store.d.ts
+/**
+ * Per-account model-visibility preferences: which models the signed-in account
+ * has hidden from the DSH model picker (issue #36).
+ *
+ * A disabled *list*, deliberately not an enabled whitelist: a new account and a
+ * model the upstream adds both start visible, and an id that temporarily
+ * disappears from the catalog is kept — when the model returns it stays hidden
+ * until this account says otherwise. Entries are also kept across sign-outs, so
+ * returning to an account restores exactly what it left.
+ *
+ * One file per variant (the two endpoints share model ids but never
+ * preferences), keyed by the same `uid:enterpriseId` identity the saved
+ * catalogs and probe records use. Not a place for secrets: model-id strings
+ * only, never a token, and never written into the desktop auth file or the
+ * plugin-owned credential copy — hiding a model is a picker preference, not
+ * credential state.
+ *
+ * Why a plugin-owned file rather than a settings section: the settings sections
+ * are statically-typed schemastery objects, and `settings.yaml` is account-global
+ * — a per-uid dynamic map fits neither without weakening the schema or mixing
+ * one account's preferences into another's config. The saved-catalog and probe
+ * stores already persist per-account data this way, so this store follows them:
+ * version-tagged document, atomic write with `0o600`, and a malformed file that
+ * reads as "nothing saved" rather than throwing.
+ *
+ * @module dsh-workbuddy-connect/visibility-store
+ */
+/** Basename of the CN variant's visibility file inside the Harness home. */
+declare const WORKBUDDY_VISIBILITY_FILENAME = ".workbuddy-model-visibility.json";
+/** Plugin-owned visibility-file path inside the Harness home. */
+declare function workbuddyVisibilityPath(filename?: string): string;
+/** Options for {@link WorkBuddyVisibilityStore}. */
+interface WorkBuddyVisibilityStoreOptions {
+  /** Explicit state-file path, overriding the `$DSH_HOME` default. */
+  path?: string;
+}
+/**
+ * The per-account hidden-model lists, read once and written atomically.
+ *
+ * Unlike the saved-catalog store, a failed *write* propagates: the caller
+ * reports it to the user rather than answering "hidden" for a preference that
+ * did not persist. Reads stay forgiving — a corrupt or unreadable file is
+ * "nothing hidden", which only ever shows models the account can still pick.
+ */
+declare class WorkBuddyVisibilityStore {
+  private readonly path;
+  private accounts;
+  constructor(options?: WorkBuddyVisibilityStoreOptions | string);
+  /** Resolved state-file path, for the CLI and tests. */
+  filePath(): string;
+  private load;
+  /** The model ids one account has hidden; empty when it never hid any. */
+  disabled(account: string): readonly string[];
+  /**
+   * Show or hide one model for one account, persisting before committing.
+   *
+   * Hiding the last-hidden model removes the account's entry entirely — an
+   * absent entry and an empty list mean the same thing (everything visible),
+   * and the file should not accumulate empty buckets. Throws when the write
+   * fails, leaving the in-memory state untouched so a re-read cannot lie about
+   * what was persisted.
+   */
+  setVisible(account: string, model: string, visible: boolean): void;
   private persist;
 }
 //#endregion
@@ -1186,6 +1273,18 @@ interface Config {
 }
 declare const Config: z<Config>;
 /**
+ * The account key model-visibility preferences are stored under: the stable
+ * identity, but only when it carries a uid.
+ *
+ * A credential whose desktop document carried no `account.uid` normalizes to
+ * an empty string; keying preferences on the resulting `":enterpriseId"` would
+ * silently share one bucket between every such account. Those accounts get no
+ * per-account preferences at all — everything stays visible and the control
+ * route explains the refusal — which is the only honest degradation: it never
+ * applies one account's hidden list to another.
+ */
+declare function visibilityAccountOf(credential: Pick<WorkBuddyCredential, 'uid' | 'enterpriseId'>): string | undefined;
+/**
  * Start both variants: their loopback endpoints, the `workbuddy` and
  * `workbuddy-ai` providers, their configuration cards, and their
  * credential-driven catalog lifecycles.
@@ -1197,4 +1296,4 @@ declare const Config: z<Config>;
  */
 declare function apply(ctx: Context, config: Config): void;
 //#endregion
-export { AI_VARIANT, type AppVersionInfo, CN_APP_VERSION_FILENAME, CN_VARIANT, type ChatIdentity, Config, FALLBACK_CN_APP_VERSION, FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, PROBE_EFFORT_CANDIDATES, type ProbeAttempt, type ProbeOutcome, type ProbeSender, type ResolveChatIdentityOptions, type UpstreamErrorKind, WORKBUDDY_AI_SETTINGS_NS, WORKBUDDY_APP_VERSION_FILENAME, WORKBUDDY_AUTH_FILENAME, WORKBUDDY_AUTH_FILE_ENV, WORKBUDDY_CATALOG_FILENAME, WORKBUDDY_HOST_HEARTBEAT_FILENAME, WORKBUDDY_PROBE_FILENAME, WORKBUDDY_PROVIDER, WORKBUDDY_SETTINGS_NS, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, WORKBUDDY_VARIANTS, type WorkBuddyAdapter, type WorkBuddyAppVersionSource, type WorkBuddyAuthStatus, WorkBuddyCatalog, type WorkBuddyCatalogFetch, WorkBuddyCatalogStore, type WorkBuddyChatResult, type WorkBuddyCredential, WorkBuddyCredentialStore, type WorkBuddyCredits, type WorkBuddyEffort, type WorkBuddyHostHeartbeat, type WorkBuddyModelBilling, type WorkBuddyModelInfo, type WorkBuddyModelReasoning, type WorkBuddyProbeRecord, WorkBuddyProbeService, type WorkBuddyProbeStatus, WorkBuddyProbeStore, type WorkBuddyProbeValidation, type WorkBuddyPromotion, type WorkBuddyRefreshOutcome, type WorkBuddyShim, WorkBuddyUpstreamClient, type WorkBuddyUpstreamModel, type WorkBuddyVariant, appUserAgent, apply, chatUserAgent, classifyUpstreamError, clearHostHeartbeat, createWorkBuddyAdapter, createWorkBuddyShim, defaultDesktopAuthCandidates, defaultDesktopAuthPath, desktopAuthCandidatesFor, fallbackChatIdentity, fingerprintModel, inject, installedAppVersion, isHeartbeatProcessAlive, modelWithCurrentPromotion, name, normalizeCredits, parseModelCatalog, parseWorkBuddyAuth, prepareChatBody, prepareInternationalChatBody, probeModel, processStartTimeMs, randomSentinel, readBundleVersion, readCliVersion, readHostHeartbeat, regionOf, resolveAppVersion, resolveChatIdentity, validAppVersion, validCliVersion, variantFor, workbuddyCatalogPath, workbuddyHostHeartbeatPath, workbuddyOwnAuthPath, workbuddyProbePath };
+export { AI_VARIANT, type AppVersionInfo, CN_APP_VERSION_FILENAME, CN_VARIANT, type ChatIdentity, Config, FALLBACK_CN_APP_VERSION, FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, PROBE_EFFORT_CANDIDATES, type ProbeAttempt, type ProbeOutcome, type ProbeSender, type ResolveChatIdentityOptions, type UpstreamErrorKind, WORKBUDDY_AI_SETTINGS_NS, WORKBUDDY_APP_VERSION_FILENAME, WORKBUDDY_AUTH_FILENAME, WORKBUDDY_AUTH_FILE_ENV, WORKBUDDY_CATALOG_FILENAME, WORKBUDDY_HOST_HEARTBEAT_FILENAME, WORKBUDDY_PROBE_FILENAME, WORKBUDDY_PROVIDER, WORKBUDDY_SETTINGS_NS, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, WORKBUDDY_VARIANTS, WORKBUDDY_VISIBILITY_FILENAME, type WorkBuddyAdapter, type WorkBuddyAppVersionSource, type WorkBuddyAuthStatus, WorkBuddyCatalog, type WorkBuddyCatalogFetch, WorkBuddyCatalogStore, type WorkBuddyChatResult, type WorkBuddyCredential, WorkBuddyCredentialStore, type WorkBuddyCredits, type WorkBuddyEffort, type WorkBuddyHostHeartbeat, type WorkBuddyModelBilling, type WorkBuddyModelInfo, type WorkBuddyModelReasoning, type WorkBuddyProbeRecord, WorkBuddyProbeService, type WorkBuddyProbeStatus, WorkBuddyProbeStore, type WorkBuddyProbeValidation, type WorkBuddyPromotion, type WorkBuddyRefreshOutcome, type WorkBuddyShim, WorkBuddyUpstreamClient, type WorkBuddyUpstreamModel, type WorkBuddyVariant, WorkBuddyVisibilityStore, appUserAgent, apply, chatUserAgent, classifyUpstreamError, clearHostHeartbeat, createWorkBuddyAdapter, createWorkBuddyShim, defaultDesktopAuthCandidates, defaultDesktopAuthPath, desktopAuthCandidatesFor, fallbackChatIdentity, fingerprintModel, inject, installedAppVersion, isHeartbeatProcessAlive, modelWithCurrentPromotion, name, normalizeCredits, parseModelCatalog, parseWorkBuddyAuth, prepareChatBody, prepareInternationalChatBody, probeModel, processStartTimeMs, randomSentinel, readBundleVersion, readCliVersion, readHostHeartbeat, regionOf, resolveAppVersion, resolveChatIdentity, validAppVersion, validCliVersion, variantFor, visibilityAccountOf, workbuddyCatalogPath, workbuddyHostHeartbeatPath, workbuddyOwnAuthPath, workbuddyProbePath, workbuddyVisibilityPath };

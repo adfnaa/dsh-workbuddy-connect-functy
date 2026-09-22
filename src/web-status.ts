@@ -15,7 +15,7 @@ import { normalizeCredits } from './upstream.ts'
 import type { WorkBuddyModelInfo } from './catalog.ts'
 import { hostIsLoopback, originIsLoopback } from './loopback.ts'
 import { WORKBUDDY_STATUS_PATH } from './status-paths.ts'
-import type { WorkBuddyWebCatalog, WorkBuddyWebModelBadge, WorkBuddyWebProbeSection, WorkBuddyWebStatus } from './status-paths.ts'
+import type { WorkBuddyWebCatalog, WorkBuddyWebModelBadge, WorkBuddyWebProbeSection, WorkBuddyWebStatus, WorkBuddyWebVisibilitySection } from './status-paths.ts'
 
 export { WORKBUDDY_STATUS_PATH } from './status-paths.ts'
 export type { WorkBuddyWebStatus } from './status-paths.ts'
@@ -40,6 +40,14 @@ export interface WorkBuddyStatusRouteOptions {
   probeKey?: string
   /** International-card preference selecting larger declared context windows. */
   useMaximumContextWindow?: () => boolean
+  /**
+   * Per-account hidden-model state for the card's visibility controls.
+   * Undefined when the caller offers none (tests, headless profiles); a
+   * defined getter may still answer undefined — a signed-in account without a
+   * stable uid has no bucket to key preferences by, and the card then renders
+   * no visibility controls rather than a list every such account would share.
+   */
+  visibility?: () => WorkBuddyWebVisibilitySection | undefined
   /**
    * Route path to mount. Defaults to the CN variant's path so existing callers
    * and tests keep their behaviour; the international variant passes its own.
@@ -147,9 +155,14 @@ export async function workBuddyWebStatus(
   // only way to tell a hidden group from a failed fetch.
   const catalog = deps.catalog?.()
   const withCatalog: WorkBuddyWebStatus = catalog === undefined ? status : { ...status, catalog }
+  // Visibility rides the document beside the model list it qualifies. Absent
+  // when no account-with-uid is in effect; the card keys its controls on the
+  // section's presence.
+  const visibility = deps.visibility?.()
+  const withVisibility: WorkBuddyWebStatus = visibility === undefined ? withCatalog : { ...withCatalog, visibility }
   const statusWithModels: WorkBuddyWebStatus = modelsField.length > 0
-    ? { ...withCatalog, models: modelsField }
-    : withCatalog
+    ? { ...withVisibility, models: modelsField }
+    : withVisibility
   // Probe state rides the signed-in document so the card can render the
   // consent switches and results without a second request. The control key
   // travels with it: this response already passed the loopback guard, and the
