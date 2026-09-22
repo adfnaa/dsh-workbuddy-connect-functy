@@ -35,18 +35,18 @@
 4. **两个宿主 boot graph 实测**（冒烟，见 §8）：0.1.5-rc.1 含 settings-plugins、不含 plugin-manager；0.1.6-alpha.2 / 0.1.7-alpha.1 含 plugin-manager（且含 0.1.6 版 settings-plugins，但其不再声明旧 slot）→ **两代各自恰好只渲染一个 seam，无重复 UI**。
 5. **卡片根元素**（第一轮为 `<div>`，第二轮修订为 `<li>`，见 §10.2）：0.1.5 设置页的卡片列表 CSS 为 `display:flex; list-style:none`，无 `li` 专属选择器；第一轮据此用 `<div>` 视觉等价。review 指出 div-in-ul 破坏列表语义，第二轮改为 `<li>` + `listStyle:'none'`，新配置页外层改语义化 `<ul>` 并清掉 margin/padding/listStyle。
 
-## 4. 实现内容（分支 `LYS86/main`，提交 `33d9260`）
+## 4. 实现内容（分支 `LYS86/main`，第一轮提交 `33d9260`，第二轮修订 `2e61e97`；下表为**当前状态**，第二轮的增量见 §10）
 
 | 文件 | 改动 |
 |---|---|
-| `src/client/index.tsx` | 恢复 `settings.plugin.item` 两个 keyed card 注册（0.5.4 原始形态）+ 保留 `plugins.bundle.config` 注册；双 slot owner 均为 type-only import；inject 服务列表不变 |
-| `src/client/WorkBuddyPluginCard.tsx` | 文档注释更新（双 seat）；`<div>` 根元素保留并注明依据 |
-| `src/client/WorkBuddyConfigPage.tsx` | 保留 PR #42 原样，注释补充 0.1.5 侧仍走旧 seam |
+| `src/client/index.tsx` | 恢复 `settings.plugin.item` 两个 keyed card 注册（0.5.4 原始形态）+ 保留 `plugins.bundle.config` 注册；双 slot owner 均为 type-only import；inject 服务列表不变；第二轮把全部注册改为 per-contribution guard（§10.1） |
+| `src/client/WorkBuddyPluginCard.tsx` | 文档注释更新（双 seat）；根元素 `<li>` + `listStyle:'none'`（第一轮曾用 `<div>`，第二轮按 review 改回列表语义，见 §10.2） |
+| `src/client/WorkBuddyConfigPage.tsx` | 保留 PR #42 的页面结构，注释补充 0.1.5 侧仍走旧 seam；第二轮外层改语义化 `<ul>` 并清列表默认样式（§10.2） |
 | `src/index.ts` | 仅注释：settings section 双职说明（0.1.5 卡片派发锚点 + settings.yaml/TUI）、`registerConfigurableProviders` 删除依据 |
 | `package.json` | 第一轮曾 bump `0.6.0`，**第二轮已回退 `0.5.4`**（0.6.0 留给完整功能的 release commit，见 §10.3）；`dsh.client.inject` 只留两代共有 6 包（移除 plugin-manager、未加回 settings-plugins）；peer 全部 `^0.1.5-rc.1 \|\| ^0.1.6-alpha.1 \|\| ^0.1.7-alpha.1`；devDeps 增 `dsh-client-ui-settings-plugins@0.1.5-rc.2`（旧 slot 类型，编译期专用） |
-| `README.md` / `README.en.md` | 版本矩阵加 0.6.0 行；明确「不要求为装本插件升级到 0.1.6」、两代配置入口位置差异、Models 页不再显示不可编辑卡片；0.3.2–0.5.4 行修正为仅 0.1.5 系列 |
+| `README.md` / `README.en.md` | 版本矩阵加 0.6.0 行；明确「不要求为装本插件升级到 0.1.6」、两代配置入口位置差异、Models 页不再显示不可编辑卡片；0.3.2–0.5.4 行修正为仅 0.1.5 系列；第二轮收紧为「计划中的 0.6.0」语气 + 逐项列举核心覆盖（§10.4） |
 | `tests/slot-registration.spec.ts` | 重写为三段：旧 seam（双 key 共存/投影/同 key 同优先级拒绝/缺 key 报错）、新 seam（PR #42 原有）、共存与能力边界（同 registry 双 slot 三注册互不干扰；未声明 slot 直接 register 抛 `not declared`——即必须走 `ctx.slots.inject` 的原因） |
-| `tests/client-fallback.spec.ts` | 镜像 apply 体更新为双 seam；新增「一个 bundle 表达全部 seam」用例（记录 inject 的 slot 名序列断言） |
+| `tests/client-fallback.spec.ts` | **当前直接导入真实 `apply()` 做隔离测试**（6 用例，§10.1）；第一轮的「镜像 apply 体 + 双 seam 用例」已随第二轮重写删除——镜像与 DRIFT WARNING 机制不复存在 |
 | `tests/settings-integration.spec.ts` | section 契约断言重锚定：每个 variant id 必须是 served settings namespace（0.1.5 卡片键）；目录条目缺席断言与 provider/模型解析回归保留 |
 
 Host 侧行为零改动：provider 注册、凭据生命周期、token refresh、catalog 三级降级、probe、图片输入、context window、CLI、heartbeat 全部未触碰。
@@ -99,7 +99,7 @@ Host 侧行为零改动：provider 注册、凭据生命周期、token refresh�
 
 Review 建议入手点：
 
-1. `src/client/index.tsx` 的 `apply()`——双 seam 注册与 try/catch 边界（与 `tests/client-fallback.spec.ts` 镜像体需保持同步，两处都有 DRIFT WARNING 注释）
+1. `src/client/index.tsx` 的 `apply()`——双 seam 注册与 per-contribution guard 边界（第二轮起 `tests/client-fallback.spec.ts` **直接导入真实 `apply()`** 驱动隔离断言，无镜像体需要人工同步）
 2. `tests/slot-registration.spec.ts` 第三个 describe（能力边界）——如果 review 者想验证「未声明 slot 不崩」，机制事实在官方 runtime 的 declaration-lifetime 文档
 3. `package.json` peer 三段范围的取舍（§6）
 4. `registerConfigurableProviders` 删除依据（§5）——如不认可，回退方案是恢复调用 + 接受 0.1.5 Models 页重现两张不可编辑卡片
@@ -108,7 +108,7 @@ Review 建议入手点：
 
 - #36 模型开关、#39/#40 凭据存储加密改造（另有调查文档 `wb-credential-encryption-2026-09-22.md`）
 - 0.1.8+ prerelease 出现时给 peer 追加一段
-- 浏览器级 smoke 通过后：按仓库惯例补 `chore: release 0.6.0` 流程（当前已在 package.json 预置 0.6.0，如需拆成独立 release 提交可还原）
+- 浏览器级 smoke 通过后：按仓库惯例补 `chore: release 0.6.0` 流程——版本 bump 到 0.6.0 在**该 release commit 中完成**（当前 `package.json` 保持已发布的 `0.5.4`；第一轮曾误 bump，第二轮已回退，见 §10.3）
 - merge 策略：本分支基于 PR #42 的 `LYS86/main`，merge 前需决定是否让贡献者先 rebase 或直接在其分支上续 commit（当前为后者）
 
 ---
@@ -156,3 +156,7 @@ Review 建议入手点：
 ### 10.6 本轮修改文件
 
 `src/client/index.tsx`、`src/client/WorkBuddyPluginCard.tsx`、`src/client/WorkBuddyConfigPage.tsx`、`tests/client-fallback.spec.ts`、`tsconfig.json`、`tsconfig.client.json`、`package.json`（版本回退）、`README.md`、`README.en.md`、`docs/dual-dsh-ui-compat-2026-09-22.md`、`lib/`（重建产物）
+
+### 10.7 文档同步（第二轮后的 editorial 修正）
+
+review 指出本文件 §4/§9 残留 3 处第一轮旧陈述与代码不符，已修正为当前状态并注明对应 §10 小节：§4 卡片根元素（`<div>` → `<li>`）、§4 ConfigPage 行（补充 `<ul>` 改动）、§4/§9 的 client-fallback spec（镜像体 → 真实 `apply()` 直测）、§9 的版本预置（0.6.0 已回退 0.5.4）。§4 表头同时补记第二轮提交号 `2e61e97`。纯文档修正，无代码变更。
