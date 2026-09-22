@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { WorkBuddyCredential } from '../src/auth.ts'
-import { normalizeCredits, WorkBuddyUpstreamClient } from '../src/upstream.ts'
+import { FALLBACK_WORKBUDDY_MODELS } from '../src/catalog.ts'
+import { normalizeCredits, parseModelCatalog, WorkBuddyUpstreamClient } from '../src/upstream.ts'
 
 /**
  * Offline unit tests for WorkBuddyUpstreamClient, mocking the global `fetch`
@@ -490,5 +491,119 @@ describe('normalizeCredits', () => {
     expect(normalizeCredits('')).toBeUndefined()
     expect(normalizeCredits('   ')).toBeUndefined()
     expect(normalizeCredits('credits')).toBeUndefined()
+  })
+})
+
+describe('CN catalog: /v3/config roster, badge merge, and fallback consistency', () => {
+  /**
+   * The CN roster comes from the `/v3/config` product document — the same one
+   * the desktop App's own selector reads — and the roster churns day to day,
+   * so the static fallback in `catalog.ts` is only a boot-time placeholder.
+   * This suite pins the mechanism (roster ∩ usable rows, badges merged from
+   * the console document) and pins the fallback table itself to the same
+   * parse, so the two cannot drift apart silently.
+   */
+
+  /** Raw `/v3/config` rows for the 2026-09-23 CN roster, verbatim from the live document. */
+  const LIVE_ROWS: readonly Record<string, unknown>[] = [
+    { id: 'hy4-preview', name: 'Hy4 preview', maxInputTokens: 1_000_000, maxOutputTokens: 64_000, supportsImages: true, supportsReasoning: true, onlyReasoning: true, reasoning: { canDisableThinking: false, defaultEffort: 'high', summary: 'auto', supportedEfforts: ['high'] }, credits: 'x0.29 credits' },
+    { id: 'hy3', name: 'Hy3', maxInputTokens: 192_000, maxOutputTokens: 64_000, supportsImages: true, supportsReasoning: true, onlyReasoning: true, reasoning: { effort: 'high', summary: 'auto' }, credits: 'x0.00 credits' },
+    { id: 'hy3-x', name: 'Hy3', maxInputTokens: 192_000, maxOutputTokens: 64_000, supportsImages: true, supportsReasoning: true, onlyReasoning: true, reasoning: { effort: 'high', summary: 'auto' }, credits: 'x0.05 credits' },
+    { id: 'deepseek-v4.1-flash', name: 'Deepseek-V4.1-Flash', maxInputTokens: 1_000_000, maxOutputTokens: 128_000, supportsImages: true, supportsReasoning: true, onlyReasoning: true, reasoning: { effort: 'high', summary: 'auto' }, credits: 'x0.03 credits' },
+    { id: 'glm-5.3', name: 'GLM-5.3', maxInputTokens: 1_000_000, maxOutputTokens: 64_000, supportsImages: true, supportsReasoning: true, onlyReasoning: true, reasoning: { effort: 'medium', summary: 'auto' }, credits: 'x0.79 credits' },
+    { id: 'glm-5.3-flash', name: 'GLM-5.3-Flash', maxInputTokens: 1_000_000, maxOutputTokens: 131_072, supportsImages: true, supportsReasoning: true, onlyReasoning: true, reasoning: { canDisableThinking: true, defaultEffort: 'high', summary: 'auto', supportedEfforts: ['low', 'high', 'max'] }, credits: 'x0.06 credits' },
+    { id: 'glm-5.2', name: 'GLM-5.2', maxInputTokens: 1_000_000, maxOutputTokens: 64_000, supportsImages: true, supportsReasoning: true, onlyReasoning: true, reasoning: { effort: 'medium', summary: 'auto' }, credits: 'x0.79 credits' },
+    { id: 'glm-5.1', name: 'GLM-5.1', maxInputTokens: 200_000, maxOutputTokens: 48_000, supportsImages: true, supportsReasoning: true, onlyReasoning: true, reasoning: { effort: 'medium', summary: 'auto' }, credits: 'x0.79 credits' },
+    { id: 'glm-5v-turbo', name: 'GLM-5v-Turbo', maxInputTokens: 200_000, maxOutputTokens: 64_000, supportsImages: true, supportsReasoning: true, onlyReasoning: true, reasoning: { effort: 'medium', summary: 'auto' }, credits: 'x0.71 credits' },
+    { id: 'minimax-m3', name: 'MiniMax-M3', maxInputTokens: 512_000, maxOutputTokens: 64_000, supportsImages: true, supportsReasoning: true, onlyReasoning: true, reasoning: { effort: 'medium', summary: 'auto' }, credits: 'x0.25 credits' },
+    { id: 'minimax-m2.7', name: 'MiniMax-M2.7', maxInputTokens: 200_000, maxOutputTokens: 48_000, supportsImages: true, supportsReasoning: true, onlyReasoning: true, reasoning: { effort: 'medium', summary: 'auto' }, credits: 'x0.19 credits' },
+    { id: 'kimi-k3-1', name: 'Kimi-K3', maxInputTokens: 1_000_000, maxOutputTokens: 32_000, supportsImages: true, supportsReasoning: true, onlyReasoning: true, reasoning: { effort: 'medium', summary: 'auto' }, credits: 'x1.62 credits' },
+    { id: 'kimi-k2.8-preview', name: 'Kimi-K2.8-Preview', maxInputTokens: 1_000_000, maxOutputTokens: 64_000, supportsImages: true, supportsReasoning: true, onlyReasoning: true, reasoning: { canDisableThinking: true, defaultEffort: 'high', summary: 'auto', supportedEfforts: ['low', 'high', 'max'] }, credits: 'x0.77 credits' },
+    { id: 'kimi-k2.7', name: 'Kimi-K2.7-Code', maxInputTokens: 256_000, maxOutputTokens: 32_000, supportsImages: true, supportsReasoning: true, onlyReasoning: true, reasoning: { effort: 'medium', summary: 'auto' }, credits: 'x0.57 credits' },
+    { id: 'kimi-k2.6', name: 'Kimi-K2.6', maxInputTokens: 256_000, maxOutputTokens: 32_000, supportsImages: true, supportsReasoning: true, onlyReasoning: true, reasoning: { effort: 'medium', summary: 'auto' }, credits: 'x0.52 credits' },
+    { id: 'deepseek-v4-pro', name: 'Deepseek-V4-Pro', maxInputTokens: 1_000_000, maxOutputTokens: 128_000, supportsImages: true, supportsReasoning: true, onlyReasoning: true, reasoning: { effort: 'high', summary: 'auto' }, credits: 'x0.51 credits' },
+  ]
+  const LIVE_ROSTER = LIVE_ROWS.map(row => String(row['id']))
+  /** Badge tags live only in the console document; verbatim from the same day. */
+  const CONSOLE_BADGES = new Map<string, readonly string[]>([
+    ['hy4-preview', ['badge:夜间免费:#FF0000']],
+    ['hy3', ['badge:限时免费:#FF0000']],
+    ['glm-5.2', ['badge:夜间折扣:#1E90FF']],
+    ['deepseek-v4.1-flash', ['badge:独家优惠:#FF0000']],
+  ])
+
+  it('membership is the cli roster intersected with usable rows', () => {
+    // A retired roster id with no row, a disabled row, and a zero-capped row
+    // must all drop out; published-but-unservable ids never reach the picker.
+    const document = {
+      models: [
+        ...LIVE_ROWS,
+        { id: 'minimax-m2.5', name: 'MiniMax-M2.5', maxInputTokens: 200_000, maxOutputTokens: 48_000, disabled: true, supportsReasoning: true, onlyReasoning: true },
+        { id: 'hunyuan-image-alpha', name: 'Hunyuan Image Alpha', maxInputTokens: 0, maxOutputTokens: 0 },
+      ],
+      agents: [{ name: 'cli', models: [...LIVE_ROSTER, 'kimi-k2.5'] }],
+    }
+    const models = parseModelCatalog(document, false, CONSOLE_BADGES)
+    expect(models.map(model => model.id)).toEqual(LIVE_ROSTER)
+  })
+
+  it('merges the console document’s badge tags without trusting it for anything else', () => {
+    const document = {
+      models: LIVE_ROWS.filter(row => row['id'] === 'hy3'),
+      agents: [{ name: 'cli', models: ['hy3'] }],
+    }
+    const models = parseModelCatalog(document, false, CONSOLE_BADGES)
+    expect(models[0]?.billing).toEqual({ credits: 'x0.00 credits', badges: ['限时免费'], free: true })
+  })
+
+  it('the static fallback equals the live parse of the day it was captured', () => {
+    // THE CONSISTENCY PIN: the fallback table must be exactly what the parser
+    // produces from the raw document the table was transcribed from — same
+    // membership, order, metadata, and badges. The one deliberate deviation is
+    // display-only: the fallback renames `hy3-x` (the document names both
+    // rows "Hy3"), which the parse cannot know to do.
+    const document = { models: LIVE_ROWS, agents: [{ name: 'cli', models: LIVE_ROSTER }] }
+    const parsed = parseModelCatalog(document, false, CONSOLE_BADGES)
+    const fallback = FALLBACK_WORKBUDDY_MODELS.map(model => model.id === 'hy3-x' ? { ...model, name: 'Hy3' } : model)
+    expect(parsed).toEqual(fallback)
+  })
+})
+
+describe('WorkBuddyUpstreamClient.fetchModels badge merge', () => {
+  it('reads the console document once for badges and ships without them when it fails', async () => {
+    const calls: string[] = []
+    const configEnvelope = JSON.stringify({
+      code: 0, msg: 'ok',
+      data: {
+        models: [{ id: 'm-1', name: 'Model One', maxInputTokens: 100_000, maxOutputTokens: 32_000, supportsReasoning: true, onlyReasoning: true, credits: 'x0.00 credits' }],
+        agents: [{ name: 'cli', models: ['m-1'] }],
+      },
+    })
+    const consoleEnvelope = JSON.stringify({
+      code: 0, msg: 'ok',
+      data: { models: [{ id: 'm-1', tags: ['badge:限时免费:#FF0000', 'not-a-badge'] }] },
+    })
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      calls.push(String(url instanceof Request ? url.url : url))
+      return fakeResponse(calls.length === 1 ? configEnvelope : consoleEnvelope)
+    }))
+    const models = await new WorkBuddyUpstreamClient().fetchModels(CREDENTIAL)
+    // Second request is the console badge read, against the same CN base.
+    expect(calls).toHaveLength(2)
+    expect(calls[1]).toContain('/console/enterprises/personal/models')
+    expect(calls[0]).toContain('/v3/config')
+    expect(models[0]?.billing).toEqual({ credits: 'x0.00 credits', badges: ['限时免费'], free: true })
+
+    // A console failure costs the badge, never the catalog.
+    calls.length = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      calls.push(String(url instanceof Request ? url.url : url))
+      if (calls.length === 1) return fakeResponse(configEnvelope)
+      throw new Error('console endpoint offline')
+    }))
+    const withoutBadges = await new WorkBuddyUpstreamClient().fetchModels(CREDENTIAL)
+    expect(calls).toHaveLength(2)
+    expect(withoutBadges.map(model => model.id)).toEqual(['m-1'])
+    expect(withoutBadges[0]?.billing).toEqual({ credits: 'x0.00 credits', free: true })
   })
 })

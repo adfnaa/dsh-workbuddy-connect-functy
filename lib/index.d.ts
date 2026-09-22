@@ -479,20 +479,47 @@ declare class WorkBuddyUpstreamClient {
   /**
    * GET the personal model catalog.
    *
-   * Two upstream documents feed this, one per variant:
+   * Both variants read `/v3/config`, the product document the desktop product
+   * itself fetches. CN used to read `/console/enterprises/personal/models`
+   * (the console catalog) instead, and that was why its model list drifted
+   * from the desktop App's selector: the console document lags the product
+   * one, and the product roster itself churns day to day (`auto`,
+   * `kimi-k3-1`, `minimax-m3` have each appeared and disappeared within a
+   * week).
    *
-   * - CN (`workbuddy`): `/console/enterprises/personal/models`, the document
-   *   the official CLI itself consumes. Unchanged behaviour.
-   * - International (`workbuddy-ai`): `/v3/config`, the product document the
-   *   App's main process fetches. The gateway splits it by User-Agent, so this
-   *   request carries the App-shaped UA while every other request keeps the
-   *   CLI UA it has always sent.
+   * What distinguishes the two variants here is the User-Agent, not the path:
+   * the gateway splits `/v3/config` by client identity, and the split is
+   * load-bearing. A CLI-shaped UA yields the CLI's roster — the chat models
+   * this plugin serves — while an App-shaped UA yields the App's internal
+   * roster. CN keeps the CLI UA it sends for chat, so the catalog it
+   * advertises is exactly the one its own requests can use. The international
+   * variant has no CLI identity, so it keeps the App-shaped UA.
    *
-   * Both are unwrapped and classified the same way — `readEnvelope` plus
+   * Membership is the `cli` roster intersected with the usable rows (see
+   * {@link parseModelCatalog}); the promo badges the product document does
+   * not carry are merged in from a best-effort console read — see
+   * {@link fetchPromoBadges}.
+   *
+   * Responses are unwrapped and classified the same way — `readEnvelope` plus
    * `envelopeError` — so an expired session or exhausted credit is reported as
    * such rather than as a generic catalog failure.
    */
   fetchModels(credential: WorkBuddyCredential, signal?: AbortSignal): Promise<readonly WorkBuddyUpstreamModel[]>;
+  /**
+   * Read the console catalog's promotional tags, by model id.
+   *
+   * `/v3/config` carries no `badge:<label>:<color>` tags — the discount labels
+   * the cards render (`限时免费`, `夜间折扣`, …) live only in
+   * `/console/enterprises/personal/models`. Since the roster now comes from
+   * the product document, those tags are read from the console one in a
+   * second request and merged by id.
+   *
+   * Best-effort by construction: a badge is a label on a price, so failing to
+   * read this document must not fail a catalog refresh. Every failure —
+   * network, envelope, an unreadable body — returns undefined, and the models
+   * simply ship without badges.
+   */
+  private fetchPromoBadges;
   /**
    * POST the billing endpoint for the aggregated remaining credit.
    *
@@ -554,8 +581,23 @@ declare class WorkBuddyUpstreamClient {
    */
   probeEffort(credential: WorkBuddyCredential, model: string, effort: string | undefined, signal: AbortSignal): Promise<ProbeAttempt>;
 }
-/** Parse either response shape after its envelope has been checked. */
-declare function parseModelCatalog(data: Record<string, unknown>, international?: boolean): readonly WorkBuddyUpstreamModel[];
+/**
+ * Parse either response shape after its envelope has been checked.
+ *
+ * Membership is the `cli` agent's roster, intersected with the rows that are
+ * usable: the roster is what the client identity this plugin presents is
+ * allowed to chat with, and joining rather than trusting it outright drops
+ * both ids the roster has retired and rows the document lists but cannot
+ * serve (no row, `disabled: true`, or non-positive caps all drop out here —
+ * a published-but-unservable id must never reach the picker).
+ *
+ * @param data - the unwrapped catalog/product document.
+ * @param international - whether it is the international product document, whose
+ * rows carry window objects and promotions.
+ * @param promoBadges - badge tags by model id, read from the console document,
+ * which is the only one that carries them.
+ */
+declare function parseModelCatalog(data: Record<string, unknown>, international?: boolean, promoBadges?: ReadonlyMap<string, readonly string[]>): readonly WorkBuddyUpstreamModel[];
 /**
  * One verified promotion entry.
  *
@@ -814,15 +856,21 @@ declare class WorkBuddyCredentialStore {
 type WorkBuddyModelInfo = WorkBuddyUpstreamModel;
 /**
  * Static CLI models observed on the CN endpoint (re-verified against the live
- * catalog 2026-09-01, including the thinking-effort and billing metadata). The
- * upstream refresh replaces this list at startup; it exists so the provider
- * registers with a usable catalog even while the first fetch is in flight or
- * offline.
+ * `/v3/config` document 2026-09-23, including the thinking-effort, badge, and
+ * billing metadata). The upstream refresh replaces this list at startup; it
+ * exists so the provider registers with a usable catalog even while the first
+ * fetch is in flight or offline.
  *
- * The list tracks the `cli` agent's model roster exactly: the 16 models the
- * desktop CLI offers. Reasoning metadata is taken verbatim from the live
- * endpoint — each model's supported effort set and whether thinking can be
- * disabled — and the `free` flag follows the upstream `x0.00` credits marker.
+ * The list tracks the `cli` agent's model roster exactly — the 16 models it
+ * offered that day. The roster churns quickly (`auto`, `kimi-k3-1`,
+ * `minimax-m3` each appeared or vanished within days, and a competing patch's
+ * 2026-09-22 snapshot named three ids that were gone a day later), so this
+ * table is a boot-time placeholder, never a promise: the live fetch
+ * intersects the day's roster with the document's usable rows, and
+ * `tests/upstream.spec.ts` pins this table to the same parse so the two
+ * cannot drift apart silently. Reasoning metadata is verbatim from the live
+ * document, and the `free` flag follows the normalized `x0.00` credits
+ * marker.
  */
 declare const FALLBACK_WORKBUDDY_MODELS: readonly WorkBuddyModelInfo[];
 /**

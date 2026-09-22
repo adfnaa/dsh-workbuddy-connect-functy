@@ -134,7 +134,7 @@ describe('WorkBuddy Host settings integration', () => {
     expect(descriptor).toBeDefined()
 
     const models = await ctx.llm.listModels('workbuddy')
-    expect(models.map(model => model.id)).toContain('auto')
+    expect(models.map(model => model.id)).toContain('hy3')
     expect(models.map(model => model.id)).toContain('deepseek-v4-pro')
     // The fallback catalog tracks the live `cli` roster, including the newer
     // models the desktop app offers that older builds lacked.
@@ -150,7 +150,7 @@ describe('WorkBuddy Host settings integration', () => {
     // description stays untouched everywhere.
     expect(byId.get('glm-5.2')?.name).toBe('GLM-5.2 · x0.79 · 夜间折扣')
     expect(byId.get('glm-5.1')?.name).toBe('GLM-5.1 · x0.79')
-    expect(byId.get('auto')?.name).toBe('Auto')
+    expect(byId.get('glm-5v-turbo')?.name).toBe('GLM-5v-Turbo · x0.71')
     expect(byId.get('glm-5.2')?.description).toBeUndefined()
     expect(byId.get('glm-5.3')?.description).toBeUndefined()
 
@@ -159,16 +159,16 @@ describe('WorkBuddy Host settings integration', () => {
     // list (the older `{effort, summary}` shape) expose no control at all, so
     // requests never carry `reasoning_effort` for them and the upstream
     // default applies — matching the desktop app's own per-model gating.
-    const autoResolved = await ctx.llm.resolveModelInfo('workbuddy', 'auto')
-    expect(autoResolved.reasoning).toBeUndefined()
+    const effortOnlyResolved = await ctx.llm.resolveModelInfo('workbuddy', 'hy3')
+    expect(effortOnlyResolved.reasoning).toBeUndefined()
     const flashResolved = await ctx.llm.resolveModelInfo('workbuddy', 'glm-5.3-flash')
     expect(flashResolved.reasoning?.efforts.map(effort => effort.id).sort()).toEqual(['high', 'low', 'max', 'off'])
 
     // Image modalities follow the per-model catalog flag (fallback list here):
-    // image-capable entries expose `image`, glm-5.1 stays text-only.
+    // every row of the current CN roster declares image support.
     const modalities = new Map(models.map(model => [model.id, model.inputModalities]))
-    expect(modalities.get('auto')).toContain('image')
-    expect(modalities.get('glm-5.1')).toEqual(['text'])
+    expect(modalities.get('hy3')).toContain('image')
+    expect(modalities.get('glm-5.1')).toContain('image')
 
     // A settings write validates against the schema and persists.
     await ctx.settings.update(WorkBuddy.WORKBUDDY_SETTINGS_NS, { authFile: '/tmp/other-workbuddy.info' })
