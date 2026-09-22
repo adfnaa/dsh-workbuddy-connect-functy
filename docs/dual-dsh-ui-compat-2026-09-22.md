@@ -1,7 +1,7 @@
 # 0.6.0 双 DSH 版本兼容（0.1.5 + 0.1.6/0.1.7）实施记录
 
 日期：2026-09-22
-状态：**已实现，等待 review**——分支 `LYS86/main`（基于 PR #42），提交 `33d9260`；`pnpm run check` 全绿（typecheck / 348 测试 / build）；三个真实宿主只读冒烟通过；尚缺浏览器级视觉确认
+状态：**已实现并通过一轮 review 修订（同日第二轮）**——分支 `LYS86/main`；`pnpm run check` 全绿（typecheck / 352 测试 / build）；三个真实宿主只读冒烟通过（修订后重验 0.1.5-rc.1 与 0.1.6-alpha.2）；尚缺浏览器级视觉确认；版本号保持 `0.5.4`，`0.6.0` bump 留给完整功能的 release commit（见 §10.3）
 关联：PR #42（DSH 0.1.6 适配）、issue #41（0.1.6-alpha.2 下 UI 入口消失）
 目标：发布的 `dsh-workbuddy-connect 0.6.0` 同时支持 DSH `0.1.5-rc` 系列与 `0.1.6-alpha.2+` 系列（含 `0.1.7-alpha.1`），**不采用**「0.6.0 只支持 0.1.6、0.1.5 用户停留在 0.5.4」的方案
 
@@ -33,7 +33,7 @@
    - `dsh-client-ui-settings-plugins@0.1.6-alpha.1` **仍声明** `settings.plugin.item`；`@0.1.6-alpha.2` 起不再声明（`slot-contract.d.ts` 消失、client.js 无引用）——即 0.1.6-alpha.1 是旧 seam 可用的过渡版本，故纳入 peer 范围
    - `plugins.bundle.config` 契约在 0.1.6-alpha.2 与 0.1.7-alpha.1 一致（keyed slot）
 4. **两个宿主 boot graph 实测**（冒烟，见 §8）：0.1.5-rc.1 含 settings-plugins、不含 plugin-manager；0.1.6-alpha.2 / 0.1.7-alpha.1 含 plugin-manager（且含 0.1.6 版 settings-plugins，但其不再声明旧 slot）→ **两代各自恰好只渲染一个 seam，无重复 UI**。
-5. **卡片根元素 `<div>`**：0.1.5 设置页的卡片列表 CSS 为 `display:flex; list-style:none`，无 `li` 专属选择器，`div` 子元素渲染无差异；新配置页的 flex 列里 `<li>` 反而会带默认列表标记。故维持 PR #42 的 `<div>`（`WorkBuddyPluginCard.tsx` 内有注释）。
+5. **卡片根元素**（第一轮为 `<div>`，第二轮修订为 `<li>`，见 §10.2）：0.1.5 设置页的卡片列表 CSS 为 `display:flex; list-style:none`，无 `li` 专属选择器；第一轮据此用 `<div>` 视觉等价。review 指出 div-in-ul 破坏列表语义，第二轮改为 `<li>` + `listStyle:'none'`，新配置页外层改语义化 `<ul>` 并清掉 margin/padding/listStyle。
 
 ## 4. 实现内容（分支 `LYS86/main`，提交 `33d9260`）
 
@@ -43,7 +43,7 @@
 | `src/client/WorkBuddyPluginCard.tsx` | 文档注释更新（双 seat）；`<div>` 根元素保留并注明依据 |
 | `src/client/WorkBuddyConfigPage.tsx` | 保留 PR #42 原样，注释补充 0.1.5 侧仍走旧 seam |
 | `src/index.ts` | 仅注释：settings section 双职说明（0.1.5 卡片派发锚点 + settings.yaml/TUI）、`registerConfigurableProviders` 删除依据 |
-| `package.json` | 版本 `0.6.0`；`dsh.client.inject` 只留两代共有 6 包（移除 plugin-manager、未加回 settings-plugins）；peer 全部 `^0.1.5-rc.1 \|\| ^0.1.6-alpha.1 \|\| ^0.1.7-alpha.1`；devDeps 增 `dsh-client-ui-settings-plugins@0.1.5-rc.2`（旧 slot 类型，编译期专用） |
+| `package.json` | 第一轮曾 bump `0.6.0`，**第二轮已回退 `0.5.4`**（0.6.0 留给完整功能的 release commit，见 §10.3）；`dsh.client.inject` 只留两代共有 6 包（移除 plugin-manager、未加回 settings-plugins）；peer 全部 `^0.1.5-rc.1 \|\| ^0.1.6-alpha.1 \|\| ^0.1.7-alpha.1`；devDeps 增 `dsh-client-ui-settings-plugins@0.1.5-rc.2`（旧 slot 类型，编译期专用） |
 | `README.md` / `README.en.md` | 版本矩阵加 0.6.0 行；明确「不要求为装本插件升级到 0.1.6」、两代配置入口位置差异、Models 页不再显示不可编辑卡片；0.3.2–0.5.4 行修正为仅 0.1.5 系列 |
 | `tests/slot-registration.spec.ts` | 重写为三段：旧 seam（双 key 共存/投影/同 key 同优先级拒绝/缺 key 报错）、新 seam（PR #42 原有）、共存与能力边界（同 registry 双 slot 三注册互不干扰；未声明 slot 直接 register 抛 `not declared`——即必须走 `ctx.slots.inject` 的原因） |
 | `tests/client-fallback.spec.ts` | 镜像 apply 体更新为双 seam；新增「一个 bundle 表达全部 seam」用例（记录 inject 的 slot 名序列断言） |
@@ -85,7 +85,7 @@ Host 侧行为零改动：provider 注册、凭据生命周期、token refresh�
 
 | 验证项 | 方式 | 结果 |
 |---|---|---|
-| typecheck / vitest / build | `pnpm run check` | 348/348 通过；产物纯度已验（client bundle 仅 require react/jsx-runtime） |
+| typecheck / vitest / build | `pnpm run check` | 第一轮 348/348；第二轮修订后 **352/352** 通过；产物纯度两轮均验（client bundle 仅 require react/jsx-runtime，无 settings-plugins / plugin-manager 的 runtime require） |
 | 0.1.5-rc.1 真实宿主 | 一次性 `DSH_HOME` + link 安装 + `dsh web`（只读） | peer 零警告；boot graph 含本插件 client.js；status 路由返回 signed-in + live catalog；日志零错误 |
 | 0.1.6-alpha.2 真实宿主 | 同上 | 同上全绿；图谱含 plugin-manager |
 | 0.1.7-alpha.1 真实宿主 | 同上 | 同上全绿 |
@@ -110,3 +110,49 @@ Review 建议入手点：
 - 0.1.8+ prerelease 出现时给 peer 追加一段
 - 浏览器级 smoke 通过后：按仓库惯例补 `chore: release 0.6.0` 流程（当前已在 package.json 预置 0.6.0，如需拆成独立 release 提交可还原）
 - merge 策略：本分支基于 PR #42 的 `LYS86/main`，merge 前需决定是否让贡献者先 rebase 或直接在其分支上续 commit（当前为后者）
+
+---
+
+## 10. Review 修订轮（2026-09-22 第二轮）
+
+第一轮方案通过 review，本轮只修 4 个 review 点，不改动双 seam / capability 自适应 / peer 策略 / 目录删除等已通过的设计。
+
+### 10.1 Per-contribution 错误隔离
+
+**问题**：第一轮的 `apply()` 用一个外层 try/catch 包住全部注册，存在两个漏洞——(a) 某个 `ctx.slots.inject()` 同步抛错时，后续 contribution 不再执行；(b) slot 回调在宿主稍后声明 slot 时才执行，彼时 `apply()` 早已返回，同步 try/catch 根本捕获不到回调内的 `ctx.slots.register()` 抛错。
+
+**修改**（`src/client/index.tsx`）：
+
+- 新增 `guardClientContribution<T>(label, fn): T | undefined`：执行单个 contribution，失败降级为带 label 的 `console.error`，成功透传返回值
+- 每个 contribution 在**两个边界**各自 guard：eager 的 `ctx.slots.inject()` / `ctx.inject()` 调用，与 deferred 回调内部的 `ctx.slots.register()`。slot 回调必须返回 `SlotInjectionEffect`（disposer），guard 失败分支以 `NOOP_DISPOSER` 兜底
+- 隔离粒度：locale 副本、**每张旧卡各自独立**（workbuddy / workbuddy-ai 两个 label）、Plugins 页配置项、probe seat（其 `ctx.inject` 回调与内层 slot 回调也各自 guard）——任一失败不影响其余注册，也永不抛入 DSH loader
+- `t = ctx.locale.bind(...)` 位于 guard 之外：locale 服务整体坏掉时 `bind` 抛错会让 `apply` 抛出（此时所有 UI 文案均不可用，属宿主级故障，host provider 不受影响）——这是有意保留的边界，非遗漏
+
+**测试**（`tests/client-fallback.spec.ts` 重写，6 个用例）：**不再镜像**——真实 `apply()` 的运行时依赖只有 React 与本地模块（DSH import 全部 type-only 擦除，实测可导入），spec 直接驱动真实入口 + 可注入失败的 fake 宿主，逐项断言贡献间独立性：第一张卡 register 失败 → 第二张卡/配置页/probe 仍注册；配置页失败 → probe 仍在；probe 失败 → 两 seam 完整；locale 失败 → 其余全注册；全量 API 崩坏 → 4 个独立降级日志、`apply` 不抛。drift 风险随镜像删除而消除。spec 同时移入 `tsconfig.client.json` 项目（需 jsx）。
+
+### 10.2 `<ul>/<li>` 列表语义
+
+- `WorkBuddyPluginCard` 根元素 `<div>` → **`<li>`**，`cardStyle` 增 `listStyle: 'none'`（两 seat 均无列表标记；0.1.5 宿主的 `<ul class="cards">` 语义恢复合法）
+- `WorkBuddyConfigPage` 外层 `<div>` → 语义化 **`<ul>`**，样式在原 column/gap 布局上显式清 `listStyle / margin / padding`
+- 卡片内部结构与视觉零改动；`plugin-card.spec.ts`（16 项）无根元素断言，全过
+
+### 10.3 版本号不提前 bump
+
+`package.json` 从第一轮的 `0.6.0` **回退 `0.5.4`**：0.6.0 计划还包含 #36 模型开关与 #39/#40 凭据加密兼容，dual UI compat 只是第一部分，正式 bump 留给完整功能合并后的 release commit（仓库惯例为独立 `chore: release` 提交）。
+
+### 10.4 README prerelease 承诺收紧
+
+- node-semver 实测最终范围 `^0.1.5-rc.1 || ^0.1.6-alpha.1 || ^0.1.7-alpha.1`：覆盖 0.1.5-rc.1/2/3、0.1.6-alpha.1/2、**0.1.6 正式**、0.1.7-alpha.1、**0.1.7 正式**；**不含 0.1.8-alpha.1**
+- 两份 README 的核心列改为逐项列举 + 明示「更新的 prerelease（如 0.1.8-alpha.x）不自动覆盖，需插件显式跟进 peer range」；删除「0.1.6-alpha.1 及以上」这类开放式承诺
+- 全部 `0.6.0 起` 的已发布语气改为「计划中的 0.6.0（开发中，尚未发布）」，安装指引注明「待 0.6.0 发布后」
+
+### 10.5 本轮验证
+
+- `pnpm run check`：typecheck ✓ / **352/352** ✓ / build ✓
+- 产物纯度：`lib/client.js` 仅 `require("react")` / `require("react/jsx-runtime")`，未引入 settings-plugins / plugin-manager 的 runtime require
+- 轻量冒烟（client 注册逻辑变更，重验两端宿主，均只读）：0.1.5-rc.1 与 0.1.6-alpha.2 各自启动、client bundle 进入 boot graph、status 路由 signed-in + live catalog、日志零错误
+- 0.1.7-alpha.1 未重验（本轮改动不影响宿主半边与 seam 选择逻辑，第一轮结论仍成立；如需可随时按同法重跑）
+
+### 10.6 本轮修改文件
+
+`src/client/index.tsx`、`src/client/WorkBuddyPluginCard.tsx`、`src/client/WorkBuddyConfigPage.tsx`、`tests/client-fallback.spec.ts`、`tsconfig.json`、`tsconfig.client.json`、`package.json`（版本回退）、`README.md`、`README.en.md`、`docs/dual-dsh-ui-compat-2026-09-22.md`、`lib/`（重建产物）

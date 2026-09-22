@@ -72,67 +72,121 @@ export const BUNDLE_NAME = 'dsh-workbuddy-connect'
 // finish registering its contributions.
 export const inject = ['slots', 'locale', 'remote', 'remote.session']
 
+/** Prefix every guarded client contribution's degradation logs with this. */
+const CLIENT_CONTRIBUTION_FAILED = '[dsh-workbuddy-connect] client contribution failed to load (host provider unaffected):'
+
+/** Disposer handed back when a deferred registration degraded: nothing to undo. */
+const NOOP_DISPOSER = (): void => {}
+
 /**
- * Register the card copy and both settings-surface seams.
+ * Run ONE browser-side contribution, degrading its failure to a `console.error`
+ * instead of throwing into the DSH loader. Returns the contribution's own
+ * value on success, or `undefined` when it degraded — the deferred slot
+ * callbacks below substitute `NOOP_DISPOSER` for that, because the slot
+ * runtime always expects a disposer back.
  *
- * The entire body is wrapped so that a DSH slot-API breaking change (for
- * example the rc.6→rc.7 `id`→`key` rename that once raised the red "Failed to
- * load plugins" banner) degrades to a `console.error` instead of throwing into
- * the DSH loader. The host provider keeps working: the `workbuddy` model
- * channel is unaffected, and `dsh-workbuddy-connect status` reports host
- * health via the heartbeat file.
+ * Every contribution is guarded at BOTH boundaries where it can throw:
  *
- * NOTE: the try/catch boundary of this function is mirrored (duplicated) in
- * `tests/client-fallback.spec.ts`, because the real client entry imports
- * browser-only DSH packages that cannot load in the Node test environment.
- * That test therefore does not import this function — it replicates its
- * shape. If you change the guarded body or the `console.error` message here,
- * update the mirrored `apply()` in that spec too, or the fallback test will
- * silently diverge from this real implementation.
+ * 1. the eager `ctx.slots.inject(...)` / `ctx.inject(...)` call itself, which
+ *    runs synchronously inside `apply()` — e.g. a slot-API shape break such as
+ *    the rc.6→rc.7 `id`→`key` rename;
+ * 2. the deferred callback, which the slot runtime invokes later — when the
+ *    owner commits the slot's declaration, or when the injected services
+ *    arrive — long after `apply()` has returned, where no enclosing try/catch
+ *    could still catch it.
+ *
+ * The pair is what makes the contributions independent: a failure in one
+ * settings seam, or in the probe control, leaves every other registration
+ * intact. Guards are for THIS browser half only; the host half reports its own
+ * errors through `ctx.logger`.
+ */
+function guardClientContribution<T>(label: string, fn: () => T): T | undefined {
+  try {
+    return fn()
+  } catch (error: unknown) {
+    console.error(`${CLIENT_CONTRIBUTION_FAILED} ${label}`, error)
+    return undefined
+  }
+}
+
+/**
+ * Register the card copy and both settings-surface seams, one guarded
+ * contribution at a time.
+ *
+ * A DSH slot-API breaking change degrades to a `console.error` per
+ * contribution instead of throwing into the DSH loader and raising the red
+ * "Failed to load plugins" banner; because each contribution carries its own
+ * guard, one failing registration never takes the others with it (the old
+ * settings cards survive a broken Plugins-page seam, and the probe control
+ * survives either). The host provider keeps working throughout: the
+ * `workbuddy` model channel is unaffected, and `dsh-workbuddy-connect status`
+ * reports host health via the heartbeat file.
+ *
+ * The tests import this function directly (`tests/client-fallback.spec.ts`),
+ * so its isolation semantics are pinned against the real entry — keep any
+ * change to the guarded structure in sync with that spec.
  */
 export function apply(ctx: ClientContext): void {
-  try {
-    const namespace = 'settings.workbuddy'
+  // The locale copy feeds every contribution below through `t`. Its guard
+  // exists only so a broken locale service cannot reach the loader; if it
+  // degrades, `t` still binds and renders the key names as fallback copy.
+  const namespace = 'settings.workbuddy'
+  guardClientContribution('settings copy', () => {
     ctx.effect(() => ctx.locale.register(namespace, { zh, en }), 'dsh-workbuddy-connect: settings copy')
-    const t = ctx.locale.bind(namespace) as WorkBuddyPluginCardInjected['t']
-    // SEAM ONE — DSH 0.1.5's settings Plugins tab. One card per variant: they
-    // show different accounts, balances, and model sets, so a single merged
-    // card could not say which account a number belongs to. The slot is
-    // key-dispatched (two keys, one component), and on 0.1.6+ hosts nothing
-    // declares it, so these registrations simply never run there.
-    for (const [index, variant] of CARD_VARIANTS.entries()) {
-      ctx.slots.inject('settings.plugin.item', () => ctx.slots.register({
-        name: 'settings.plugin.item',
-        key: variant.id,
-        priority: 30 - index,
-        inject: (): WorkBuddyPluginCardInjected => ({ t, variant }),
-      }, WorkBuddyPluginCard))
-    }
-    // SEAM TWO — DSH 0.1.6+'s Plugins page. One configuration entry for the
-    // whole bundle, keyed by its package name as the page dispatches it; the
-    // entry mounts both variants' cards itself. On 0.1.5 hosts nothing
-    // declares this slot, so it never runs there.
-    ctx.slots.inject('plugins.bundle.config', () => ctx.slots.register({
-      name: 'plugins.bundle.config',
-      key: BUNDLE_NAME,
-      locale: namespace,
-    }, WorkBuddyConfigPage))
-    ctx.inject(['modelDirectories'], scope => {
-      scope.slots.inject('conversation.input.right', () => scope.slots.register({
-        name: 'conversation.input.right',
-        id: 'workbuddy-probe',
-        order: 10,
-        inject: sessionId => ({
-          directory: scope.modelDirectories.directoryFor(
-            sessionId as Parameters<typeof scope.modelDirectories.directoryFor>[0],
-          ).store,
-          t,
-        }),
-      }, WorkBuddyProbeControl))
+  })
+  const t = ctx.locale.bind(namespace) as WorkBuddyPluginCardInjected['t']
+  // SEAM ONE — DSH 0.1.5's settings Plugins tab. One card per variant: they
+  // show different accounts, balances, and model sets, so a single merged
+  // card could not say which account a number belongs to. The slot is
+  // key-dispatched (two keys, one component), and on 0.1.6+ hosts nothing
+  // declares it, so these registrations simply never run there. Each variant
+  // is its own contribution: one card's failure cannot hide the other's.
+  for (const [index, variant] of CARD_VARIANTS.entries()) {
+    const label = `settings.plugin.item card "${variant.id}"`
+    guardClientContribution(label, () => {
+      ctx.slots.inject('settings.plugin.item', () => (
+        guardClientContribution(label, () => ctx.slots.register({
+          name: 'settings.plugin.item',
+          key: variant.id,
+          priority: 30 - index,
+          inject: (): WorkBuddyPluginCardInjected => ({ t, variant }),
+        }, WorkBuddyPluginCard)) ?? NOOP_DISPOSER
+      ))
     })
-  } catch (error: unknown) {
-    // Degrade silently on the page: the host provider still serves models.
-    // Developers see the full cause in the browser console; users see no banner.
-    console.error('[dsh-workbuddy-connect] client card failed to load (host provider unaffected):', error)
   }
+  // SEAM TWO — DSH 0.1.6+'s Plugins page. One configuration entry for the
+  // whole bundle, keyed by its package name as the page dispatches it; the
+  // entry mounts both variants' cards itself. On 0.1.5 hosts nothing
+  // declares this slot, so it never runs there.
+  guardClientContribution('plugins.bundle.config page', () => {
+    ctx.slots.inject('plugins.bundle.config', () => (
+      guardClientContribution('plugins.bundle.config page', () => ctx.slots.register({
+        name: 'plugins.bundle.config',
+        key: BUNDLE_NAME,
+        locale: namespace,
+      }, WorkBuddyConfigPage)) ?? NOOP_DISPOSER
+    ))
+  })
+  // The reasoning-probe seat in the conversation composer. `modelDirectories`
+  // may arrive after this fiber starts, so the scoped callback — and the slot
+  // callback inside it — are guarded at their own boundaries too.
+  guardClientContribution('conversation probe control', () => {
+    ctx.inject(['modelDirectories'], scope => {
+      guardClientContribution('conversation probe control', () => {
+        scope.slots.inject('conversation.input.right', () => (
+          guardClientContribution('conversation probe control', () => scope.slots.register({
+            name: 'conversation.input.right',
+            id: 'workbuddy-probe',
+            order: 10,
+            inject: sessionId => ({
+              directory: scope.modelDirectories.directoryFor(
+                sessionId as Parameters<typeof scope.modelDirectories.directoryFor>[0],
+              ).store,
+              t,
+            }),
+          }, WorkBuddyProbeControl)) ?? NOOP_DISPOSER
+        ))
+      })
+    })
+  })
 }

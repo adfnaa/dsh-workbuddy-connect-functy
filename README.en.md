@@ -48,19 +48,19 @@ For models without declared levels, Web and Desktop instead use user-authorized,
 
 Prerequisite: the WorkBuddy desktop app is installed and signed in. The plugin reuses the app's sign-in state and follows account switches automatically; the same applies to the international WorkBuddy AI app, and the two do not affect each other.
 
-**Match the plugin version to your DSH core** — since `0.6.0` one plugin version spans both core generations, so there is no per-version pairing to check anymore; older releases still pair one-to-one, and a mismatched combination fails to start DSH:
+**Match the plugin version to your DSH core** — the **planned `0.6.0`** (in development, not yet released) will let one plugin version span both core generations, removing the per-version pairing; released versions still pair one-to-one, and a mismatched combination fails to start DSH:
 
 | Plugin | Required DSH core | Desktop app |
 |---|---|---|
-| **0.6.0+** (dual-UI adaptive) | `0.1.5-rc.1` / `rc.2` / `rc.3`, or `0.1.6-alpha.1` and newer (incl. `0.1.6-alpha.2`, `0.1.7-alpha.1`) | `2.0.7`+ works today; desktop builds bundling `0.1.6+` will work too |
+| **0.6.0 (planned; dual-UI adaptive)** | `0.1.5-rc.1` / `rc.2` / `rc.3`; the `0.1.6-alpha` line (incl. `alpha.1` / `alpha.2`) and `0.1.6` stable; verified against `0.1.7-alpha.1` (`0.1.7` stable is inside the range too). **Newer prereleases (e.g. `0.1.8-alpha.x`) are NOT covered automatically** — the plugin must extend its peer range first | `2.0.7`+ works today; desktop builds bundling `0.1.6+` will work too |
 | **0.3.2 – 0.5.4** (international support since `0.5.0`) | the `0.1.5-rc.1` line only (no `0.1.6+`; see [#41](https://github.com/corrinehu/dsh-workbuddy-connect/issues/41)) | `2.0.7`+ (bundled core `0.1.5-rc.1`) |
 | **0.3.0 – 0.3.1** | `0.1.2-rc.1` | `2.0.5` |
 | **0.2.6** | `0.1.1-rc.2` (older line) | `2.0.3` / `2.0.4` |
 
-- **`0.6.0` does not require upgrading to DSH `0.1.6` just to install WorkBuddy Connect**: the plugin adapts to whichever configuration surface the host actually provides at load time — `0.1.5` and `0.1.6+` each get their own UI, independently.
+- **The planned `0.6.0` does not require upgrading to DSH `0.1.6` just to install WorkBuddy Connect**: the plugin adapts to whichever configuration surface the host actually provides at load time — `0.1.5` and `0.1.6+` each get their own UI, independently.
 - **Where the cards live depends on the DSH version**: on DSH `0.1.5` they stay in Settings → Plugins as the two cards 「WorkBuddy」 and 「WorkBuddy AI」; on DSH `0.1.6+` the plugin directory moved to the sidebar **Plugins** page, where both cards sit inside the `dsh-workbuddy-connect` configuration page (_Plugins → dsh-workbuddy-connect_).
-- From `0.6.0` on, the Models settings page no longer shows the non-editable WorkBuddy / WorkBuddy AI cards (consistent across both core generations); the model picker, `/model`, and chat calls are unaffected.
-- On DSH `0.1.5` / `0.1.6+`, just install the latest: `dsh plugin --profile web add dsh-workbuddy-connect`
+- From the planned `0.6.0` on, the Models settings page no longer shows the non-editable WorkBuddy / WorkBuddy AI cards (consistent across both core generations); the model picker, `/model`, and chat calls are unaffected.
+- On DSH `0.1.5` / `0.1.6` / `0.1.7`, install the latest once `0.6.0` ships: `dsh plugin --profile web add dsh-workbuddy-connect`
 - Still on DSH `0.1.2-rc.1`? Stay on `0.3.1`: `dsh plugin --profile web add dsh-workbuddy-connect@0.3.1`
 - Still on DSH `0.1.1-rc.2`? Stay on the older release: `dsh plugin --profile web add dsh-workbuddy-connect@0.2.6`
 - The desktop app has bundled `0.1.5-rc.1` since `2.0.7`, so it can use the latest plugin directly; `2.0.5` and earlier apps (bundled `0.1.2-rc.1`) should stay on `0.3.1`

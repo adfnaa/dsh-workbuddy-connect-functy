@@ -13,8 +13,20 @@ export type WorkBuddyConfigPageProps =
   PropsRuntime<'plugins.bundle.config'>
   & PropsLocale<'settings.workbuddy'>
 
-/** Cards stack with the section's own rhythm; the page supplies no chrome. */
-const pageStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 12 }
+/**
+ * The cards' list; the page supplies no other chrome. A semantic `<ul>` —
+ * each card below is an `<li>` — with the user-agent list defaults cleared so
+ * only the column/gap rhythm remains, keeping the layout identical to the
+ * flex column it replaced while giving the page real list semantics.
+ */
+const pageStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
+  listStyle: 'none',
+  margin: 0,
+  padding: 0,
+}
 
 /**
  * Render the bundle's configuration: one status card per WorkBuddy variant.
@@ -33,10 +45,10 @@ export function WorkBuddyConfigPage({ view, t }: WorkBuddyConfigPageProps): Reac
   // keeps the bundle legible if a summary seat ever renders it.
   if (view === 'summary') return t('intro')
   return (
-    <div style={pageStyle}>
+    <ul style={pageStyle}>
       {CARD_VARIANTS.map(variant => (
         <WorkBuddyPluginCard key={variant.id} t={t} variant={variant} />
       ))}
-    </div>
+    </ul>
   )
 }

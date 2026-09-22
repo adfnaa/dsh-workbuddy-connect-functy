@@ -71,6 +71,11 @@ const cardStyle: CSSProperties = {
   border: '1px solid var(--dsw-alias-border-l2)',
   borderRadius: 10,
   background: 'var(--dsw-alias-bg-module-platform)',
+  // The card is an <li> under BOTH seats: DSH 0.1.5's Plugins tab nests cards
+  // in its own <ul>, and the 0.1.6+ configuration page provides a <ul> too.
+  // Neither owner draws list markers for its cards, and this keeps the new
+  // page's <ul> free of them even before the host's own styles land.
+  listStyle: 'none',
 }
 const headerStyle: CSSProperties = {
   boxSizing: 'border-box',
@@ -827,12 +832,12 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
         : t('signedOut')
 
   return (
-    // A plain <div>, not the <li> the 0.1.5 tab's <ul> would suggest: that
-    // list is `display:flex; list-style:none` with no li-specific selectors,
-    // so a div child renders identically there, and the 0.1.6+ configuration
-    // page stacks the cards in its own flex column where an <li> would draw a
-    // stray list marker.
-    <div style={cardStyle}>
+    // An <li>, matching both seats: DSH 0.1.5's Plugins tab renders slot
+    // entries directly inside its <ul>, so a div there would break list
+    // semantics; the 0.1.6+ configuration page below wraps the cards in its
+    // own <ul>. The cardStyle's `listStyle: 'none'` keeps either page free of
+    // stray list markers.
+    <li style={cardStyle}>
       <button
         type="button"
         style={headerStyle}
@@ -1019,6 +1024,6 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
             {status?.status === 'error' ? <p style={errorStyle}>{status.message}</p> : null}
           </div>
         : null}
-    </div>
+    </li>
   )
 }
