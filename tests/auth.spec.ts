@@ -449,6 +449,32 @@ async function asLinux<T>(options: {
     })
   })
 
+  it('skips an empty config-home file and resolves to the data-home credential', async () => {
+    // The probe treats an empty file as absent and moves on; the resolved-path
+    // diagnostic must agree, or doctor would name the empty config-home file
+    // while authentication actually uses the data-home candidate.
+    const root = await mkdtemp(join(tmpdir(), 'wb-xdg-empty-'))
+    CLEANUP.push(() => rm(root, { recursive: true, force: true }))
+    const configHome = join(root, 'config')
+    const dataHome = join(root, 'data')
+    const configAuth = join(configHome, 'CodeBuddyExtension', 'Data', 'Public', 'auth')
+    const dataAuth = join(dataHome, 'CodeBuddyExtension', 'Data', 'Public', 'auth')
+    await mkdir(configAuth, { recursive: true })
+    await mkdir(dataAuth, { recursive: true })
+    await writeFile(join(configAuth, 'workbuddy-desktop.info'), '   \n')
+    await writeFile(join(dataAuth, 'workbuddy-desktop.info'), nestedDoc(Date.now() + 3600_000))
+    await asLinux({ home: '/home/alice', env: { XDG_CONFIG_HOME: configHome, XDG_DATA_HOME: dataHome } }, async () => {
+      const store = new WorkBuddyCredentialStore({
+        variant: CN_VARIANT,
+        ownPath: join(root, 'own.json'),
+        refresh: async credential => ({ accessToken: credential.accessToken }),
+      })
+      await expect(store.resolvedDesktopAuthPath()).resolves.toBe(join(dataAuth, 'workbuddy-desktop.info'))
+      // And the probe really does authenticate from the data-home file.
+      await expect(store.current()).resolves.toMatchObject({ accessToken: 'at', source: 'desktop' })
+    })
+  })
+
   it('resolves the actually-hit path when only the data home carries the file', async () => {
     // Issue #43 diagnostics: the first *candidate* is the config home, but
     // when only the data-home copy exists, resolvedDesktopAuthPath() must

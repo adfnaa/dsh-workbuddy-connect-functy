@@ -854,11 +854,12 @@ declare class WorkBuddyCredentialStore {
   desktopAuthFormat(): Promise<DesktopAuthFormat>;
   private readOwn;
   /**
-   * The first desktop candidate that exists as a regular file — the one the
-   * probe would actually read; `undefined` when none does. Diagnostics only:
-   * unlike the probe it never parses or decrypts, so doctor can name the
-   * file that was hit (e.g. the XDG data-home copy on UOS/deepin, issue #43)
-   * instead of the first *possible* location.
+   * The first desktop candidate the probe would actually read from; `undefined`
+   * when none qualifies. Semantics deliberately match the probe: empty files
+   * are skipped (the probe classifies them as absent and moves on), so on an
+   * XDG layout where the config-home file is empty but the data-home file
+   * holds the credential, diagnostics name the *data-home* file — the one
+   * authentication really uses. Like the probe it never parses or decrypts.
    */
   resolvedDesktopAuthPath(): Promise<string | undefined>;
   /** Whether any desktop-file candidate exists as a regular file; diagnostics only. */

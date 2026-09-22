@@ -623,10 +623,14 @@ export function apply(ctx: Context, config: Config): void {
    */
   const lastAccounts = new Map<string, string>()
 
-  // One at-rest key provider for both variants: they read different desktop
-  // files but the same WorkBuddy install's key, so both share one spawn and
-  // one in-memory cache. The helper only runs if an encrypted desktop
-  // credential is actually read.
+  // One at-rest key provider shared by both variants — an implementation
+  // choice for one spawn and one in-memory cache, not a claim about key
+  // sharing: only the CN WorkBuddy 5.6.2 install has been verified to hold
+  // the key its envelopes name; a Global (WorkBuddy AI) encrypted credential
+  // has never been seen live. If an envelope ever names a key the shared
+  // resolution cannot match, the provider fails with a keyId-mismatch
+  // diagnosis rather than a wrong open. The helper only runs if an encrypted
+  // desktop credential is actually read.
   const atRestKeys = new WorkBuddyAtRestKeyProvider()
   const runtimes = WORKBUDDY_VARIANTS.map(variant => createVariantRuntime(
     config,
