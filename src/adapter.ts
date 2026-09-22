@@ -90,7 +90,11 @@ function withLegacyImageBudget(store: AttachmentStore): AttachmentStore {
       if (property !== 'readImageRequest') return Reflect.get(target, property, receiver)
       return (...args: Parameters<AttachmentStore['readImageRequest']>) => {
         const [ref, policy, signal] = args
-        const withPixels = Number.isSafeInteger((policy as { maxPixels?: number } | undefined)?.maxPixels)
+        // The ≤0.1.5 store's own validity rule is "safe integer AND positive";
+        // a present-but-non-positive maxPixels would pass an isSafeInteger-only
+        // check and still be rejected there, so it is replaced too.
+        const present = (policy as { maxPixels?: number } | undefined)?.maxPixels
+        const withPixels = Number.isSafeInteger(present) && (present as number) > 0
           ? policy
           : { ...policy, maxPixels: REQUEST_IMAGE_BUDGETS.requestImagePixelBudget } as typeof policy
         return target.readImageRequest(ref, withPixels, signal)

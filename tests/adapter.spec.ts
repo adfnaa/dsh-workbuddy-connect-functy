@@ -118,4 +118,40 @@ describe('request-image contract across host generations', () => {
     // The 0.1.6 target shape reached the store with only the budget added.
     expect(observed).toMatchObject({ width: 1, height: 1, maxBytes: 1_048_576, maxPixels: 4_194_304 })
   })
+
+  it('replaces a present-but-non-positive maxPixels with the route budget', async () => {
+    // The ≤0.1.5 store accepts only a *positive* safe integer; 0 and negatives
+    // are safe integers and would slip through an isSafeInteger-only guard,
+    // then be rejected by the store — so the wrapper replaces them too.
+    // Called directly on the wrapped store (pi-ai itself always sends a
+    // pixel-less target, so only a future pi-ai could produce these shapes).
+    let observed: { maxPixels?: number } | undefined
+    const store = {
+      readImageRequest(_ref: unknown, policy: { maxPixels?: number }) {
+        if (!Number.isSafeInteger(policy.maxPixels) || (policy.maxPixels ?? 0) <= 0) {
+          throw new Error('Image request maxPixels must be a positive integer.')
+        }
+        observed = policy
+        return Promise.resolve({ bytes: 1 })
+      },
+    }
+    const adapter = imageAdapter(store)
+    const wrapped = (adapter as unknown as {
+      config: { resolveAttachments: () => { readImageRequest: (ref: unknown, policy: unknown, signal?: AbortSignal) => Promise<unknown> } }
+    }).config.resolveAttachments()
+    for (const invalid of [0, -1]) {
+      observed = undefined
+      await wrapped.readImageRequest(
+        { attachmentId: 'sha256:test', mediaType: 'image/png', width: 1, height: 1, bytes: 70 },
+        { width: 1, height: 1, maxBytes: 1_048_576, maxPixels: invalid },
+      )
+      expect(observed).toMatchObject({ maxPixels: 4_194_304 })
+    }
+    // A positive value is forwarded exactly as received.
+    await wrapped.readImageRequest(
+      { attachmentId: 'sha256:test', mediaType: 'image/png', width: 1, height: 1, bytes: 70 },
+      { maxPixels: 999 },
+    )
+    expect(observed).toMatchObject({ maxPixels: 999 })
+  })
 })
