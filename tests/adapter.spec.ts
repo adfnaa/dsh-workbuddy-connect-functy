@@ -35,3 +35,87 @@ describe('WorkBuddy adapter model descriptors', () => {
     expect(snapshot.models.getModel(WORKBUDDY_PROVIDER, 'model')?.compat?.maxTokensField).toBe('max_tokens')
   })
 })
+
+describe('request-image contract across host generations', () => {
+  /**
+   * The exact failure from docs/image-request-maxpixels-2026-09-23.md: a
+   * link-installed plugin runs the pi-ai it was built with (0.1.6, which hands
+   * `readImageRequest` a per-image target with no `maxPixels`) against a host
+   * attachment service from ≤0.1.5 (which validates `maxPixels` and throws
+   * otherwise). The adapter must fill its own route budget into a
+   * pixel-less policy before the store sees it.
+   */
+  const IMAGE_MESSAGE = {
+    id: 'test-message' as never,
+    role: 'user' as const,
+    source: { kind: 'user' as const },
+    content: [
+      { type: 'text' as const, text: 'describe' },
+      { type: 'image' as const, attachment: { attachmentId: 'sha256:test', mediaType: 'image/png', width: 1, height: 1, bytes: 70 } },
+    ],
+  }
+
+  function imageAdapter(store: Record<string, unknown>) {
+    const catalog = new WorkBuddyCatalog([{
+      id: 'glm-5.3', name: 'GLM-5.3', contextWindow: 1_000, maxTokens: 128_000,
+      supportsImages: true, billing: { free: false },
+    }])
+    return createWorkBuddyAdapter({
+      catalog,
+      store: {} as WorkBuddyCredentialStore,
+      shim: {
+        ready: Promise.resolve(),
+        baseUrl: () => 'http://127.0.0.1:1',
+        token: () => 'test-token',
+        close: async () => {},
+      } as WorkBuddyShim,
+      resolveAttachments: () => store as never,
+    }).adapter
+  }
+
+  it('fills the route pixel budget for a store that validates maxPixels (≤0.1.5 hosts)', async () => {
+    let observed: unknown
+    const store = {
+      readImageRequest(_ref: unknown, policy: { maxPixels?: number }) {
+        // The ≤0.1.5 contract, verbatim in spirit.
+        if (!Number.isSafeInteger(policy.maxPixels) || (policy.maxPixels ?? 0) <= 0) {
+          throw new Error('Image request maxPixels must be a positive integer.')
+        }
+        observed = policy
+        // Sentinel past validation: proves the request survived the contract.
+        throw new Error('PAST_VALIDATION')
+      },
+    }
+    const adapter = imageAdapter(store)
+    const call = await adapter.prepareCall(WORKBUDDY_PROVIDER, 'glm-5.3')
+    // The message rides dsh-llm's branded ids/media types; the test's interest
+    // is the policy at the attachment boundary, not Message branding.
+    const messages = [IMAGE_MESSAGE as never]
+    await expect(async () => {
+      for await (const _chunk of call.stream({ provider: WORKBUDDY_PROVIDER, model: 'glm-5.3', messages })) {
+        // drain; the store's sentinel is expected to end the iteration
+      }
+    }).rejects.toThrow('PAST_VALIDATION')
+    expect(observed).toMatchObject({ maxPixels: 4_194_304 })
+  })
+
+  it('passes a policy that already carries maxPixels through untouched', async () => {
+    let observed: unknown
+    const store = {
+      readImageRequest(_ref: unknown, policy: Record<string, unknown>) {
+        observed = policy
+        throw new Error('PAST_VALIDATION')
+      },
+    }
+    const adapter = imageAdapter(store)
+    const call = await adapter.prepareCall(WORKBUDDY_PROVIDER, 'glm-5.3')
+    const messages = [IMAGE_MESSAGE as never]
+    await expect(async () => {
+      for await (const _chunk of call.stream({ provider: WORKBUDDY_PROVIDER, model: 'glm-5.3', messages })) {
+        // drain
+      }
+    }).rejects.toThrow('PAST_VALIDATION')
+    // The 0.1.6 target shape reached the store with only the budget added.
+    expect(observed).toMatchObject({ width: 1, height: 1, maxBytes: 1_048_576, maxPixels: 4_194_304 })
+  })
+})
