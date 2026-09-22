@@ -17,7 +17,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type { SettingsNamespace } from '@deepseek-ai/dsh-settings'
 import type {} from '@deepseek-ai/dsh-attachment'
-import { WorkBuddyCredentialStore, type WorkBuddyCredential } from './auth.ts'
+import { WorkBuddyCredentialStore, type WorkBuddyCredential, type WorkBuddyStoreOptions } from './auth.ts'
+import { WorkBuddyAtRestKeyProvider } from './desktop-credential-protection.ts'
 import { FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, WorkBuddyCatalog } from './catalog.ts'
 import { workbuddyCatalogPath, WorkBuddyCatalogStore } from './catalog-store.ts'
 import { WorkBuddyVisibilityStore, workbuddyVisibilityPath } from './visibility-store.ts'
@@ -384,12 +385,14 @@ function createVariantRuntime(
   current: () => Config,
   identityOf: (variantId: string) => string | undefined,
   accountOf: (variantId: string) => string | undefined,
+  keyProvider: WorkBuddyStoreOptions['keyProvider'],
 ): VariantRuntime {
   const client = new WorkBuddyUpstreamClient()
   const configured = configuredAuthFile(config, variant)
   const store = new WorkBuddyCredentialStore({
     variant,
     ...configured === undefined ? {} : { desktopPath: configured },
+    ...keyProvider === undefined ? {} : { keyProvider },
     refresh: credential => client.refreshToken(credential),
   })
   const fallback = fallbackFor(variant)
@@ -620,12 +623,18 @@ export function apply(ctx: Context, config: Config): void {
    */
   const lastAccounts = new Map<string, string>()
 
+  // One at-rest key provider for both variants: they read different desktop
+  // files but the same WorkBuddy install's key, so both share one spawn and
+  // one in-memory cache. The helper only runs if an encrypted desktop
+  // credential is actually read.
+  const atRestKeys = new WorkBuddyAtRestKeyProvider()
   const runtimes = WORKBUDDY_VARIANTS.map(variant => createVariantRuntime(
     config,
     variant,
     () => current(),
     id => lastIdentities.get(id),
     id => lastAccounts.get(id),
+    atRestKeys,
   ))
 
   // Same-origin routes backing each Plugin-configuration card; the webServer

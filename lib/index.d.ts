@@ -4,6 +4,75 @@ import { PiAiAdapter } from "@deepseek-ai/dsh-llm-pi-ai";
 import { Context } from "@deepseek-ai/cordis";
 import { SettingsNamespace } from "@deepseek-ai/dsh-settings";
 import { AttachmentStore } from "@deepseek-ai/dsh-attachment";
+//#region src/desktop-credential-protection.d.ts
+/**
+ * WorkBuddy 5.6.x at-rest credential protection: classification, key
+ * resolution, and field decryption for the desktop app's encrypted auth file.
+ *
+ * Since WorkBuddy 5.6 the desktop app encrypts `auth.accessToken` and
+ * `auth.refreshToken` at rest (`buildPolicy: "fields"`, on by default), so the
+ * plugin reads `{$wbEncrypted:1, envelope}` wrappers instead of token strings
+ * (issues #39/#40). Everything needed to open them lives on the same machine:
+ *
+ * - the sealed payload (`{version:1, atRestSecretKey}`) comes from the
+ *   WorkBuddy-modified Electron's private `workbuddyStorage` binding, reached
+ *   by running *its own* binary once with `ELECTRON_RUN_AS_NODE=1`;
+ * - `protectorKey = sha256(atRestSecretKey, utf8)` opens the envelopes with
+ *   AES-256-GCM; the AAD builder below is transcribed from the app's own
+ *   `buildAuthenticatedContextAad` (verified live against 5.6.2, see
+ *   `docs/r3-final.js` in the working copy — not committed).
+ *
+ * The plugin process itself can never call `_linkedBinding` (it runs in DSH's
+ * Node, not the forked Electron), so the helper is spawned. The key is cached
+ * in memory only, single-flight, and re-resolved when an envelope names a
+ * different key id. Neither the payload, the key, nor any token is ever
+ * logged; error messages carry sizes, ids, and exit codes only.
+ *
+ * @module dsh-workbuddy-connect/desktop-credential-protection
+ */
+/** The four states a desktop auth document can be read as. */
+type DesktopAuthFormat = 'absent' | 'plaintext' | 'encrypted' | 'unrecognized';
+/** The spawned helper. Separated from the provider so tests can stand it in. */
+type WorkBuddyKeyPayloadSource = () => Promise<string>;
+/** Provider options. */
+interface WorkBuddyAtRestKeyProviderOptions {
+  /** Explicit Electron binary; overrides the platform default and env. */
+  electronPath?: string;
+  /** Helper timeout in milliseconds; default 10s. */
+  timeoutMs?: number;
+  /**
+   * Where the payload comes from. Defaults to spawning WorkBuddy's own
+   * Electron with `ELECTRON_RUN_AS_NODE=1`; tests supply a stand-in so no
+   * test ever touches the real binary or a real key.
+   */
+  source?: WorkBuddyKeyPayloadSource;
+}
+/**
+ * In-memory protector-key resolver: one spawn per key id, single-flight, never
+ * persisted. The cache is keyed by the id envelopes ask for, so an envelope
+ * sealed under a rotated key triggers exactly one fresh resolution.
+ */
+declare class WorkBuddyAtRestKeyProvider {
+  private readonly electronPath;
+  private readonly timeoutMs;
+  private readonly source;
+  private cache;
+  private inflight;
+  constructor(options?: WorkBuddyAtRestKeyProviderOptions);
+  /** The binary the default helper would use, for diagnostics. */
+  helperPath(): string | undefined;
+  /**
+   * A protector key matching one of the requested envelope key ids. The first
+   * id the cache answers wins; otherwise one spawn resolves the current key,
+   * which must match a request — a mismatch means the envelopes were sealed by
+   * a different install than the one this machine now runs, and no key we can
+   * reach will open them.
+   */
+  protectorKeyFor(requested: readonly string[]): Promise<Buffer>;
+  private ingest;
+  private spawnPayload;
+}
+//#endregion
 //#region src/app-version.d.ts
 /** Basename of the saved version under `$DSH_HOME`. */
 declare const WORKBUDDY_APP_VERSION_FILENAME = ".workbuddy-ai-version.json";
@@ -627,6 +696,13 @@ interface WorkBuddyStoreOptions {
   refresh: (credential: WorkBuddyCredential) => Promise<WorkBuddyRefreshOutcome>;
   /** Refresh this long before actual expiry; default five minutes. */
   refreshMarginMs?: number;
+  /**
+   * Resolver for WorkBuddy 5.6's at-rest protector key, needed when the
+   * desktop file stores encrypted token fields. Defaults to the real
+   * provider, which spawns the WorkBuddy Electron binary; tests stand in a
+   * stub. Structural so a store never depends on how the key is reached.
+   */
+  keyProvider?: Pick<WorkBuddyAtRestKeyProvider, 'protectorKeyFor' | 'helperPath'>;
 }
 /** Basename of the plugin-owned credential copy inside the Harness home. */
 declare const WORKBUDDY_AUTH_FILENAME = ".workbuddy-auth.json";
@@ -672,6 +748,7 @@ declare class WorkBuddyCredentialStore {
   private readonly refresh;
   private readonly refreshMarginMs;
   private readonly ownPath;
+  private readonly keyProvider;
   private desktopPathOverride;
   private inflight;
   constructor(options: WorkBuddyStoreOptions);
@@ -709,8 +786,24 @@ declare class WorkBuddyCredentialStore {
    * (ENOENT) falls through to the next candidate; a file that is present
    * but unparsable is authoritative for its slot, so a stale older-version
    * file never silently wins over a broken newer one.
+   *
+   * Since WorkBuddy 5.6 the token fields may arrive in at-rest envelopes, so
+   * the text is classified before the regular parser sees it. An encrypted
+   * document must be *opened*, never skipped: a decryption failure is a
+   * diagnosable error (helper missing, wrong key) that surfaces in status and
+   * chat instead of reading as "signed out" — and `current()` must not paper
+   * over it with a stale plugin-owned copy.
    */
   private readDesktop;
+  /** Open a 5.6 encrypted desktop document into the regular credential shape. */
+  private openEncryptedDesktop;
+  /**
+   * Classify the first existing desktop candidate's on-disk format; `absent`
+   * when no candidate exists. Diagnostics only — it never spawns the key
+   * helper and never decrypts, so doctor can describe the file without
+   * attempting the unlock.
+   */
+  desktopAuthFormat(): Promise<DesktopAuthFormat>;
   private readOwn;
   /** Whether any desktop-file candidate exists as a regular file; diagnostics only. */
   desktopFilePresent(): Promise<boolean>;

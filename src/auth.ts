@@ -14,6 +14,14 @@ import { basename, dirname, join } from 'node:path'
 import { withFileLock, writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { regionOf } from './upstream.ts'
+import {
+  WorkBuddyAtRestKeyProvider,
+  classifyDesktopAuthDocument,
+  keyIdsOf,
+  openAuthField,
+  unwrapDesktopAuthDocument,
+} from './desktop-credential-protection.ts'
+import type { DesktopAuthClassification, DesktopAuthFormat } from './desktop-credential-protection.ts'
 import type { WorkBuddyVariant } from './variants.ts'
 import type { WorkBuddyRefreshOutcome } from './upstream.ts'
 
@@ -58,6 +66,13 @@ export interface WorkBuddyStoreOptions {
   refresh: (credential: WorkBuddyCredential) => Promise<WorkBuddyRefreshOutcome>
   /** Refresh this long before actual expiry; default five minutes. */
   refreshMarginMs?: number
+  /**
+   * Resolver for WorkBuddy 5.6's at-rest protector key, needed when the
+   * desktop file stores encrypted token fields. Defaults to the real
+   * provider, which spawns the WorkBuddy Electron binary; tests stand in a
+   * stub. Structural so a store never depends on how the key is reached.
+   */
+  keyProvider?: Pick<WorkBuddyAtRestKeyProvider, 'protectorKeyFor' | 'helperPath'>
 }
 
 /** Basename of the plugin-owned credential copy inside the Harness home. */
@@ -270,6 +285,7 @@ export class WorkBuddyCredentialStore {
   private readonly refresh: WorkBuddyStoreOptions['refresh']
   private readonly refreshMarginMs: number
   private readonly ownPath: string
+  private readonly keyProvider: NonNullable<WorkBuddyStoreOptions['keyProvider']>
   private desktopPathOverride: string | undefined
   private inflight: Promise<WorkBuddyCredential> | undefined
 
@@ -278,6 +294,7 @@ export class WorkBuddyCredentialStore {
     this.refresh = options.refresh
     this.refreshMarginMs = options.refreshMarginMs ?? 5 * 60 * 1000
     this.ownPath = options.ownPath ?? (options.variant ? join(resolveDshHome(), options.variant.ownFilename) : workbuddyOwnAuthPath())
+    this.keyProvider = options.keyProvider ?? new WorkBuddyAtRestKeyProvider()
     this.desktopPathOverride = options.desktopPath
   }
 
@@ -450,16 +467,69 @@ export class WorkBuddyCredentialStore {
    * (ENOENT) falls through to the next candidate; a file that is present
    * but unparsable is authoritative for its slot, so a stale older-version
    * file never silently wins over a broken newer one.
+   *
+   * Since WorkBuddy 5.6 the token fields may arrive in at-rest envelopes, so
+   * the text is classified before the regular parser sees it. An encrypted
+   * document must be *opened*, never skipped: a decryption failure is a
+   * diagnosable error (helper missing, wrong key) that surfaces in status and
+   * chat instead of reading as "signed out" — and `current()` must not paper
+   * over it with a stale plugin-owned copy.
    */
   private async readDesktop(): Promise<WorkBuddyCredential | undefined> {
     for (const desktopPath of this.resolveDesktopCandidates()) {
+      let text: string
       try {
-        return parseWorkBuddyAuth(await readFile(desktopPath, 'utf8'))
+        text = await readFile(desktopPath, 'utf8')
       } catch (error: unknown) {
         if (!isENOENT(error)) throw error
+        continue
       }
+      const classification = classifyDesktopAuthDocument(text)
+      if (classification.format === 'plaintext') return parseWorkBuddyAuth(text)
+      if (classification.format !== 'encrypted') return undefined
+      return await this.openEncryptedDesktop(classification)
     }
     return undefined
+  }
+
+  /** Open a 5.6 encrypted desktop document into the regular credential shape. */
+  private async openEncryptedDesktop(
+    classification: Extract<DesktopAuthClassification, { format: 'encrypted' }>,
+  ): Promise<WorkBuddyCredential | undefined> {
+    const wrapped = classification.wrapped
+    const key = await this.keyProvider.protectorKeyFor(keyIdsOf(wrapped.fields))
+    const text = unwrapDesktopAuthDocument(classification, field => {
+      const plaintext = openAuthField(key, field.envelope)
+      if (plaintext === undefined) {
+        throw new Error(
+          `the encrypted desktop credential's ${field.field} could not be decrypted`
+          + ` (envelope key id ${field.envelope.keyId});`
+          + ' the WorkBuddy app may hold a different at-rest key — open it once to reseal the sign-in',
+        )
+      }
+      return plaintext
+    })
+    return parseWorkBuddyAuth(text)
+  }
+
+  /**
+   * Classify the first existing desktop candidate's on-disk format; `absent`
+   * when no candidate exists. Diagnostics only — it never spawns the key
+   * helper and never decrypts, so doctor can describe the file without
+   * attempting the unlock.
+   */
+  async desktopAuthFormat(): Promise<DesktopAuthFormat> {
+    for (const desktopPath of this.resolveDesktopCandidates()) {
+      let text: string
+      try {
+        text = await readFile(desktopPath, 'utf8')
+      } catch (error: unknown) {
+        if (!isENOENT(error)) throw error
+        continue
+      }
+      return classifyDesktopAuthDocument(text).format
+    }
+    return 'absent'
   }
 
   private async readOwn(): Promise<WorkBuddyCredential | undefined> {
