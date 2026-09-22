@@ -648,6 +648,13 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
    */
   const [readFailure, setReadFailure] = useState<string>()
   const [busy, setBusy] = useState(false)
+  /**
+   * A visibility toggle in flight. Deliberately NOT the card-wide `busy`: that
+   * flag drives the Refresh buttons' labels, and a checkbox write must not
+   * make them claim a refresh the user never pressed. The checkboxes alone
+   * disable while a toggle is in flight; everything else stays live.
+   */
+  const [toggling, setToggling] = useState(false)
   // Three tabs. Default is the live status plus the one action the card
   // carries; the two reference sets — context capacity, then rates and the
   // per-package breakdown — are deliberate visits, since neither changes while
@@ -817,7 +824,12 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
   const control = useCallback(async (action: { action: 'probe'; model: string } | { action: 'clear' } | { action: 'set-maximum-context-window'; enabled: boolean } | { action: 'set-model-visibility'; model: string; visible: boolean; account: string }): Promise<void> => {
     const key = status?.status === 'signed-in' ? status.probeKey : undefined
     if (key === undefined) return
-    setBusy(true)
+    // A visibility toggle runs on its own in-flight flag so the Refresh
+    // buttons keep their idle labels (see `toggling`); every other action
+    // keeps the card-wide `busy` those labels report.
+    const visibility = action.action === 'set-model-visibility'
+    if (visibility) setToggling(true)
+    else setBusy(true)
     const controller = trackController()
     try {
       const response = await fetch(variant.probePath, {
@@ -865,7 +877,9 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
       }
     } finally {
       manualControllers.current.delete(controller)
-      if (mounted.current) setBusy(false)
+      if (!mounted.current) return
+      if (visibility) setToggling(false)
+      else setBusy(false)
     }
   }, [refresh, status, t, trackController, variant.probePath])
 
@@ -1035,7 +1049,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
                         models={status.models}
                         visibility={status.visibility}
                         t={t}
-                        busy={busy}
+                        busy={busy || toggling}
                         onToggle={(modelId, visible) => {
                           // The expected-account guard: name the account these
                           // checkboxes were rendered from, so a write that

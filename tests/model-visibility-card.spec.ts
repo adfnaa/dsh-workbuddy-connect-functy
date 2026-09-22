@@ -26,6 +26,9 @@ describe('model visibility card controls', () => {
   let statusBody: Record<string, unknown>
   /** The response every POST answers with; `{ state: 'updated' }` saves. */
   let postResponse: Record<string, unknown>
+  /** When set, POSTs wait in `held` until the test releases them. */
+  let holdPosts: boolean
+  const held: (() => void)[] = []
   const posts: { body: Record<string, unknown>; headers: unknown }[] = []
   const request = vi.fn()
 
@@ -39,6 +42,7 @@ describe('model visibility card controls', () => {
       probeKey: 'test-key',
       models: MODELS.map(model => ({ id: model.id, name: model.name })),
       visibility: { account: 'u1:', disabled: ['hy3'] },
+      catalog: { source: 'live', fetchedAt: Date.now() },
       ...overrides,
     }
   }
@@ -60,6 +64,19 @@ describe('model visibility card controls', () => {
       if (node.type !== 'input') return false
       return (node.props as Record<string, unknown>)['type'] === 'checkbox'
     }).map(node => (node.props as Record<string, unknown>)['checked'] === true)
+  }
+
+  /** Same order as {@link checkboxStates}: whether each checkbox is disabled. */
+  function checkboxDisabled(): boolean[] {
+    return view!.root.findAll(node => {
+      if (node.type !== 'input') return false
+      return (node.props as Record<string, unknown>)['type'] === 'checkbox'
+    }).map(node => (node.props as Record<string, unknown>)['disabled'] === true)
+  }
+
+  /** Every button label currently rendered, for label-state assertions. */
+  function buttonLabels(): string[] {
+    return view!.root.findAllByType('button').map(node => node.children.join(''))
   }
 
   /** Mount, expand, and switch to the context tab where the controls live. */
@@ -86,6 +103,8 @@ describe('model visibility card controls', () => {
   beforeEach(() => {
     signedIn()
     postResponse = { state: 'updated' }
+    holdPosts = false
+    held.length = 0
     posts.length = 0
     request.mockReset().mockImplementation(async (_url: string, init?: RequestInit) => {
       if (init?.method !== 'POST') {
@@ -95,6 +114,7 @@ describe('model visibility card controls', () => {
       }
       const body = JSON.parse(String(init.body)) as Record<string, unknown>
       posts.push({ body, headers: init.headers })
+      if (holdPosts) await new Promise<void>(resolve => { held.push(resolve) })
       // A save the host confirms rewrites its truth before the card re-reads;
       // a refused one (state !== 'updated') leaves the truth untouched.
       if (postResponse['state'] === 'updated') applyToggle(body)
@@ -186,6 +206,29 @@ describe('model visibility card controls', () => {
     await act(async () => { refresh.props.onClick() })
     await act(async () => { await new Promise(resolve => { setTimeout(resolve, 0) }) })
     expect(checkboxStates()).toEqual([true, true, true])
+  })
+
+  it('a toggle in flight keeps the Refresh buttons idle; only the checkboxes lock', async () => {
+    // Regression: the visibility write used the card-wide `busy` flag, so
+    // every checkbox click relabelled 刷新/刷新模型列表 to "refreshing…" —
+    // buttons the user never pressed. A toggle now runs on its own flag.
+    holdPosts = true
+    await mount()
+    const boxes = view!.root.findAll(node => node.type === 'input'
+      && (node.props as Record<string, unknown>)['type'] === 'checkbox')
+    const onChange = (boxes[0]!.props as Record<string, unknown>)['onChange'] as (event: unknown) => void
+    await act(async () => { onChange({ currentTarget: { checked: false } }) })
+    // The write is held open: the buttons keep their idle labels and stay
+    // enabled-reading, while the checkboxes alone are locked.
+    expect(buttonLabels()).toContain(en.refresh)
+    expect(buttonLabels()).toContain(en.refreshModels)
+    expect(buttonLabels()).not.toContain(en.refreshing)
+    expect(checkboxDisabled()).toEqual([true, true, true])
+    // Release the write; the box settles per the host's confirmation.
+    await act(async () => { for (const release of held.splice(0)) release() })
+    await act(async () => { await new Promise(resolve => { setTimeout(resolve, 0) }) })
+    expect(checkboxDisabled()).toEqual([false, false, false])
+    expect(checkboxStates()).toEqual([false, false, true])
   })
 
   it('the international card renders the same controls (shared component, both DSH surfaces)', async () => {
