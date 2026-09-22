@@ -4,11 +4,13 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   defaultDesktopAuthCandidates,
+  desktopAuthCandidatesFor,
   parseWorkBuddyAuth,
   WorkBuddyCredentialStore,
   WORKBUDDY_AUTH_FILE_ENV,
   type WorkBuddyCredential,
 } from '../src/auth.ts'
+import { AI_VARIANT } from '../src/variants.ts'
 
 // node:os's ESM namespace rejects vi.spyOn (non-configurable), so homedir is
 // mocked at the module level; unset state falls through to the real one.
@@ -29,6 +31,7 @@ const CLEANUP: (() => Promise<void>)[] = []
 
 afterEach(async () => {
   await Promise.all(CLEANUP.splice(0).map(clean => clean()))
+  vi.unstubAllEnvs()
 })
 
 function nestedDoc(expiresAt: number): string {
@@ -349,23 +352,100 @@ describe('WSL default desktop path probing', () => {
     try {
       return await run()
     } finally {
-      Object.defineProperty(process, 'platform', { value: savedPlatform, configurable: true })
-      fakeOs.home = undefined
-      fakeOs.release = undefined
-      for (const [name, value] of Object.entries(savedEnv)) {
-        if (value === undefined) delete process.env[name]
-        else process.env[name] = value
-      }
+    Object.defineProperty(process, 'platform', { value: savedPlatform, configurable: true })
+    fakeOs.home = undefined
+    fakeOs.release = undefined
+    for (const [name, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
     }
   }
+}
 
-  it('probes the matching mounted Windows profile before the Linux path', async () => {
+/** Run with the platform stubbed to a plain (non-WSL) Linux and a fixed home. */
+async function asLinux<T>(options: {
+  home: string
+  env?: Record<string, string>
+}, run: () => Promise<T>): Promise<T> {
+  const savedPlatform = process.platform
+  const managed = ['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'WSL_DISTRO_NAME', 'WSL_INTEROP']
+  const savedEnv = Object.fromEntries(managed.map(name => [name, process.env[name]]))
+  Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
+  fakeOs.home = options.home
+  fakeOs.release = '6.12.0-generic'
+  for (const name of managed) delete process.env[name]
+  Object.assign(process.env, options.env)
+  try {
+    return await run()
+  } finally {
+    Object.defineProperty(process, 'platform', { value: savedPlatform, configurable: true })
+    fakeOs.home = undefined
+    fakeOs.release = undefined
+    for (const [name, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
+}
+
+  it('probes the matching mounted Windows profile before the Linux paths', async () => {
     await asWsl({ home: '/home/alice' }, async () => {
       expect(defaultDesktopAuthCandidates()).toEqual([
         join('/mnt/c/Users/alice/AppData/Local', AUTH_TAIL),
         join('/mnt/c/Users/alice/AppData/Roaming', AUTH_TAIL),
         join('/home/alice/.config', AUTH_TAIL),
+        join('/home/alice/.local/share', AUTH_TAIL),
       ])
+    })
+  })
+
+  it('probes both XDG bases on native Linux, config home before data home', async () => {
+    await asLinux({ home: '/home/alice' }, async () => {
+      expect(defaultDesktopAuthCandidates()).toEqual([
+        join('/home/alice/.config', AUTH_TAIL),
+        join('/home/alice/.local/share', AUTH_TAIL),
+      ])
+    })
+  })
+
+  it('honors non-empty absolute XDG overrides and falls back on invalid values', async () => {
+    await asLinux({
+      home: '/home/alice',
+      env: { XDG_CONFIG_HOME: '/custom/config', XDG_DATA_HOME: '/custom/data' },
+    }, async () => {
+      expect(defaultDesktopAuthCandidates()).toEqual([
+        join('/custom/config', AUTH_TAIL),
+        join('/custom/data', AUTH_TAIL),
+      ])
+    })
+    // A relative override is not a path the XDG spec allows, so it must not
+    // be joined onto: both bases fall back to their defaults.
+    await asLinux({
+      home: '/home/alice',
+      env: { XDG_CONFIG_HOME: 'relative/config', XDG_DATA_HOME: '  ' },
+    }, async () => {
+      expect(defaultDesktopAuthCandidates()).toEqual([
+        join('/home/alice/.config', AUTH_TAIL),
+        join('/home/alice/.local/share', AUTH_TAIL),
+      ])
+    })
+  })
+
+  it('swaps only the basename for the AI variant and still honors the env override', async () => {
+    await asLinux({ home: '/home/alice' }, async () => {
+      const aiTail = join('CodeBuddyExtension', 'Data', 'Public', 'auth', 'workbuddy-desktop-ai.info')
+      expect(desktopAuthCandidatesFor(AI_VARIANT)).toEqual([
+        join('/home/alice/.config', aiTail),
+        join('/home/alice/.local/share', aiTail),
+      ])
+      // The explicit env override outranks every default candidate.
+      vi.stubEnv(AI_VARIANT.env, '/explicit/ai-credential.info')
+      const store = new WorkBuddyCredentialStore({
+        variant: AI_VARIANT,
+        ownPath: '/tmp/own.json',
+        refresh: async credential => ({ accessToken: credential.accessToken }),
+      })
+      expect(store.desktopAuthPath()).toBe('/explicit/ai-credential.info')
     })
   })
 

@@ -130,9 +130,12 @@ function wslDesktopAuthCandidates(home: string): string[] {
 /**
  * Platform-default candidates for the WorkBuddy desktop app's auth file, in
  * probe order. Windows probes both AppData roots: current builds write under
- * `%LOCALAPPDATA%` (Local), older ones under `%APPDATA%` (Roaming). WSL probes
- * those same Windows locations through its mounted Windows profile before the
- * native Linux location.
+ * `%LOCALAPPDATA%` (Local), older ones under `%APPDATA%` (Roaming). Linux
+ * probes both XDG bases — most distributions write under the config home,
+ * but UOS/deepin builds write under the data home (issue #43), and probing
+ * only one silently reads a signed-in app as signed out. WSL probes those
+ * same Windows locations through its mounted Windows profile before the
+ * native Linux locations.
  */
 export function defaultDesktopAuthCandidates(): string[] {
   const home = homedir()
@@ -146,10 +149,31 @@ export function defaultDesktopAuthCandidates(): string[] {
     ]
   }
   if (process.platform === 'linux') {
-    const linux = join(home, '.config', ...DESKTOP_AUTH_RELATIVE_PATH)
-    return isWsl() ? [...wslDesktopAuthCandidates(home), linux] : [linux]
+    // An XDG override is adopted only as a non-empty absolute path; an
+    // invalid value falls back to the platform default rather than joining a
+    // relative path onto it.
+    const configHome = xdgBase('XDG_CONFIG_HOME', join(home, '.config'))
+    const dataHome = xdgBase('XDG_DATA_HOME', join(home, '.local', 'share'))
+    // Config home first, keeping the probe order existing installs hit.
+    const linux = dedupeCandidates([
+      join(configHome, ...DESKTOP_AUTH_RELATIVE_PATH),
+      join(dataHome, ...DESKTOP_AUTH_RELATIVE_PATH),
+    ])
+    return isWsl() ? dedupeCandidates([...wslDesktopAuthCandidates(home), ...linux]) : linux
   }
   return []
+}
+
+/** The XDG base directory for one env variable, or its platform default. */
+function xdgBase(envName: string, fallback: string): string {
+  const value = process.env[envName]?.trim()
+  if (value !== undefined && value !== '' && value.startsWith('/')) return value
+  return fallback
+}
+
+/** Drop duplicate candidates while keeping probe order. */
+function dedupeCandidates(candidates: readonly string[]): string[] {
+  return [...new Set(candidates)]
 }
 
 /**
@@ -160,7 +184,7 @@ export function defaultDesktopAuthCandidates(): string[] {
  * is reused verbatim and just the filename is swapped.
  */
 export function desktopAuthCandidatesFor(variant: WorkBuddyVariant): string[] {
-  return defaultDesktopAuthCandidates().map(path => join(dirname(path), variant.desktopFilename))
+  return dedupeCandidates(defaultDesktopAuthCandidates().map(path => join(dirname(path), variant.desktopFilename)))
 }
 
 /** First platform-default candidate; see {@link defaultDesktopAuthCandidates}. */
