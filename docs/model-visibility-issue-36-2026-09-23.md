@@ -114,10 +114,11 @@ listModels() override（adapter.ts）：super 结果 - hidden(account) → 选�
 
 `pnpm run check`：typecheck ✓ / vitest **387/387** ✓（含 expected-account guard 与 UI 合并用例：模型不重复、checkbox 与 context 同行、无 contextWindow 模型可勾选、AI 偏好共存）/ build ✓；client bundle 仍仅 require react/jsx-runtime。
 
-**浏览器冒烟（2026-09-23，均通过）**：
+**浏览器冒烟（2026-09-23，均通过；两轮——首版独立列表 + 合并布局）**：
 
-- **0.1.6-alpha.2**（9001，真实配置副本）：Plugins → workbuddy-connect → CN 卡片「上下文窗口」标签出现「模型显示」16 个 checkbox；取消勾选 Kimi-K3 → 磁盘文件记录该账号 `disabled:["kimi-k3-1"]`（0600）→ 模型选择器 WorkBuddy 组 16→15、Kimi-K3 消失（AI 组 22 不变）；重新勾选 → disabled 清空 → picker 恢复 16。
-- **0.1.5-rc.1**（9002，core15 + 同一副本）：设置 → 插件 → 两张卡原位 → CN 卡同标签页同控件；取消勾选 MiniMax-M3 → picker 16→15、MiniMax-M3 消失；恢复勾选 → 清空。两份 home 事后均回到空 accounts，AI 侧文件从未创建（未动 AI 的开关，桶清理语义正确）。
+- **0.1.6-alpha.2**（9001，真实配置副本，合并布局复验）：Plugins → workbuddy-connect → CN 卡片「上下文窗口」标签为**单一合并列表**——「模型显示」独立标题已不存在，每个模型一行（checkbox + 名称 + 费率 + 窗口数值同行，Kimi-K3 全页只出现一次）；取消勾选 MiniMax-M3 → 磁盘记录（0600）→ 刷新按钮保持空闲文案 → 模型选择器 WorkBuddy 组 16→15、MiniMax-M3 消失（AI 组 22 不变）；恢复勾选 → picker 回 16。逐行锁定复验：写入在途期间采样禁用数恒为 1（只有被点行）。
+- **0.1.5-rc.1**（9002，core15 + 同一副本）：设置 → 插件 → 两张卡原位 → CN 卡同一合并列表自动生效（checkbox+context 同行）；取消勾选 Kimi-K2.6 → picker 相应变化 → 恢复。
+- README 已补两张实拍截图：`assets/6.png`（0.1.6 配置页合并列表）、`assets/7.png`（0.1.5 设置卡片同视图）。
 
 ## 10. 已知限制
 
