@@ -91,7 +91,7 @@ Host 侧行为零改动：provider 注册、凭据生命周期、token refresh�
 | 0.1.7-alpha.1 真实宿主 | 同上 | 同上全绿 |
 | seam 无重复 | boot graph 对比 + npm 包源码 | 0.1.5 无 plugin-manager；0.1.6+ 的 settings-plugins 不再声明旧 slot → 各代恰渲染一个 seam |
 | Models 页行为 | 源码分析（§5） | 无 WorkBuddy 行、选择器/调用不受影响 |
-| **浏览器视觉确认** | **部分完成（见 §11）** | 0.1.6-alpha.2 侧已在两个真实宿主上由浏览器实查通过：模型选择器分组、推理等级按钮、Plugins 面板配置页全渲染（9000/9001 双环境）；**0.1.5 侧（社区桌面两张卡）仍待真机确认** |
+| **浏览器视觉确认** | **完成（见 §11）** | 0.1.6-alpha.2 侧：9000/9001 双环境浏览器实查通过（模型选择器分组、推理等级按钮、Plugins 面板配置页全渲染）。0.1.5-rc.1 侧：社区桌面（desktop profile link 安装本构建）用户实查通过——设置→插件 两张卡片在原位正常渲染；设置→模型 无 WorkBuddy 卡片（§5 设计内，两代统一） |
 
 另：官方 `apps/desktop`（Electron 壳包 Web UI、与 dsh 版本锁定发布、尚未公开分发）与本方案正交——双 seam 按 slot 存在性自适应，对任何携带任一 UI 的宿主成立。
 
@@ -183,7 +183,16 @@ review 指出本文件 §4/§9 残留 3 处第一轮旧陈述与代码不符，�
 
 0.1.6+ 的配置入口在**左侧栏「插件」面板 → 已安装 → workbuddy-connect → 查看**；设置弹窗里的「内置插件」页是只读部署清单（只有名称/启用状态/include 项，无配置入口），「模型」页则因目录卡片删除而不显示 WorkBuddy（§5，设计内）。用户实测时先后在「模型」页和「内置插件」页找不到入口，属于导航位置变化导致的误认，不是缺陷——但值得在 README 里写明，已更新 README.md / README.en.md 两处（「信息查看与检测」加 0.1.6+ 入口提示；「配置入口随 DSH 版本不同」改为精确路径并注明内置插件页无配置入口）。
 
-### 11.3 复现环境备注（一次性，测后可删）
+### 11.3 0.1.5-rc.1 社区桌面确认（用户实查，2026-09-23）
+
+desktop profile 以 link 方式安装本构建（`~/.dsh/profiles/desktop/package.json` 依赖 + bundles + node_modules 符号链接指向本仓库）后，用户在社区桌面（0.1.5-rc.1 内核）确认：
+
+- **设置 → 插件**：「DSH WorkBuddy AI Connect」「DSH WorkBuddy Connect」两张卡片在原位正常渲染（旧 seam 生效，卡片可展开）。
+- **设置 → 模型**：无 WorkBuddy / WorkBuddy AI 卡片（DeepSeek、zai-coding-cn、minimax-token-plan、zen 照常）——§5 目录删除决策的预期行为，与 0.1.6+ 侧统一。
+
+至此 §8 验证矩阵全部完成，无遗留验证项。
+
+### 11.4 复现环境备注（一次性，测后可删）
 
 `/tmp/dsh-smoke/`：core15/16/17 三套 scratch 内核；home16（9000 用空 home）；home-real16（真实 home 的 rsync 副本，内含凭据副本，测完应 `rm -rf`）；web-9000.log / web-9001.log。真实 `~/.dsh` 全程未改动（副本内断链已修复为绝对路径，`profiles/web` 的插件 link 从用户开发目录改指本仓库）。9001 上 web profile 携带的社区插件（genui、dshmarket 等 12 个）在 0.1.6 内核下与本插件互不干扰，boot graph 同时含本插件与 plugin-manager 的 client.js。
 
