@@ -314,23 +314,42 @@ describe('control route: set-model-visibility', () => {
 
   it('persists a hide through the wired handler and reports updated', async () => {
     const store = new WorkBuddyVisibilityStore(join(tempDir('wb-vis-'), 'v.json'))
+    let seen: string | undefined
     const { origin, key } = await mount({
-      setModelVisibility: async (modelId, visible) => {
-        store.setVisible('u1:', modelId, visible)
+      setModelVisibility: async (modelId, visible, expectedAccount) => {
+        seen = expectedAccount
+        store.setVisible(expectedAccount, modelId, visible)
         return { state: 'updated' }
       },
     })
-    const { status, body } = await post(origin, key, { action: 'set-model-visibility', model: 'hy3', visible: false })
+    const { status, body } = await post(origin, key, { action: 'set-model-visibility', model: 'hy3', visible: false, account: 'u1:' })
     expect(status).toBe(200)
     expect(body['state']).toBe('updated')
+    // The expected account travels with the write; nothing is bucketed by guess.
+    expect(seen).toBe('u1:')
     expect(store.disabled('u1:')).toEqual(['hy3'])
+  })
+
+  it('an expected-account mismatch is the host guard\'s stale-account refusal', async () => {
+    // The exact guard index.ts wires: compare the expected account against the
+    // account now in effect, refuse on mismatch. A stale card from before an
+    // account switch must not write into the new account's bucket.
+    const current = 'uid-b:'
+    const { origin, key } = await mount({
+      setModelVisibility: async (modelId, _visible, expectedAccount) => {
+        if (expectedAccount !== current) return { state: 'stale-account', reason: 'the signed-in account changed' }
+        return { state: 'updated' }
+      },
+    })
+    const { body } = await post(origin, key, { action: 'set-model-visibility', model: 'hy3', visible: false, account: 'uid-a:' })
+    expect(body['state']).toBe('stale-account')
   })
 
   it('reports the handler failure reason instead of pretending it saved', async () => {
     const { origin, key } = await mount({
       setModelVisibility: async () => ({ state: 'failed', reason: 'model visibility needs a signed-in account with a stable user id' }),
     })
-    const { status, body } = await post(origin, key, { action: 'set-model-visibility', model: 'hy3', visible: false })
+    const { status, body } = await post(origin, key, { action: 'set-model-visibility', model: 'hy3', visible: false, account: 'u1:' })
     expect(status).toBe(200)
     expect(body['state']).toBe('failed')
     expect(String(body['reason'])).toContain('stable user id')
@@ -339,9 +358,13 @@ describe('control route: set-model-visibility', () => {
   it('rejects malformed actions and unsupported variants', async () => {
     const { origin, key } = await mount()
     expect((await post(origin, key, { action: 'set-model-visibility', model: 'hy3' })).status).toBe(400)
-    expect((await post(origin, key, { action: 'set-model-visibility', model: '', visible: true })).status).toBe(400)
-    expect((await post(origin, key, { action: 'set-model-visibility', model: 'hy3', visible: 'yes' })).status).toBe(400)
+    expect((await post(origin, key, { action: 'set-model-visibility', model: '', visible: true, account: 'u1:' })).status).toBe(400)
+    expect((await post(origin, key, { action: 'set-model-visibility', model: 'hy3', visible: 'yes', account: 'u1:' })).status).toBe(400)
+    // Without an expected account there is nothing to guard, so there is no
+    // write at all — required, not defaulted.
+    expect((await post(origin, key, { action: 'set-model-visibility', model: 'hy3', visible: true })).status).toBe(400)
+    expect((await post(origin, key, { action: 'set-model-visibility', model: 'hy3', visible: true, account: '' })).status).toBe(400)
     // Deps without the action answer 404, matching set-maximum-context-window.
-    expect((await post(origin, key, { action: 'set-model-visibility', model: 'hy3', visible: true })).status).toBe(404)
+    expect((await post(origin, key, { action: 'set-model-visibility', model: 'hy3', visible: true, account: 'u1:' })).status).toBe(404)
   })
 })

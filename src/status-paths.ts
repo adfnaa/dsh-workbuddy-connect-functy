@@ -66,6 +66,13 @@ export interface WorkBuddyProbeAction {
   enabled?: boolean
   /** Requested picker visibility for `set-model-visibility`. */
   visible?: boolean
+  /**
+   * Expected account key for `set-model-visibility`: the `visibility.account`
+   * the card rendered its checkboxes from. The host refuses the write when the
+   * signed-in account has moved on, so a stale card can never land one
+   * account's toggle in another account's bucket.
+   */
+  account?: string
 }
 
 /**

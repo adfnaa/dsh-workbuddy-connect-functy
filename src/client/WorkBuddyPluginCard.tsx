@@ -814,7 +814,7 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
    * the host never accepts a prompt, a sentinel, or a model outside its own
    * catalog from here.
    */
-  const control = useCallback(async (action: { action: 'probe'; model: string } | { action: 'clear' } | { action: 'set-maximum-context-window'; enabled: boolean } | { action: 'set-model-visibility'; model: string; visible: boolean }): Promise<void> => {
+  const control = useCallback(async (action: { action: 'probe'; model: string } | { action: 'clear' } | { action: 'set-maximum-context-window'; enabled: boolean } | { action: 'set-model-visibility'; model: string; visible: boolean; account: string }): Promise<void> => {
     const key = status?.status === 'signed-in' ? status.probeKey : undefined
     if (key === undefined) return
     setBusy(true)
@@ -840,6 +840,15 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
       // document's next read restores the honest state.
       if ((action.action === 'set-maximum-context-window' || action.action === 'set-model-visibility')
         && (typeof value !== 'object' || value === null || (value as Record<string, unknown>)['state'] !== 'updated')) {
+        const state = typeof value === 'object' && value !== null ? (value as Record<string, unknown>)['state'] : undefined
+        // A stale write (the account switched under the open card) is its own
+        // outcome: explain it in the user's language and re-read now, so the
+        // checkboxes converge on the new account's section instead of waiting
+        // for the next poll while still showing the departed account's list.
+        if (action.action === 'set-model-visibility' && state === 'stale-account') {
+          await refresh(controller.signal)
+          throw new Error(t('visibilityStaleAccount'))
+        }
         const reason = typeof value === 'object' && value !== null && 'reason' in value
           ? String((value as Record<string, unknown>)['reason'])
           : t('requestFailed')
@@ -1027,7 +1036,17 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
                         visibility={status.visibility}
                         t={t}
                         busy={busy}
-                        onToggle={(modelId, visible) => { void control({ action: 'set-model-visibility', model: modelId, visible }) }}
+                        onToggle={(modelId, visible) => {
+                          // The expected-account guard: name the account these
+                          // checkboxes were rendered from, so a write that
+                          // races an account switch is refused host-side.
+                          void control({
+                            action: 'set-model-visibility',
+                            model: modelId,
+                            visible,
+                            account: status.visibility?.account ?? '',
+                          })
+                        }}
                       />
                       <ContextTable
                         models={status.models}

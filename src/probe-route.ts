@@ -52,10 +52,12 @@ export interface WorkBuddyProbeRouteOptions {
   /**
    * Hide or show one model in the picker for the signed-in account. The
    * handler refuses (with a reason, not a crash) when no account with a stable
-   * uid is in effect or the preference file cannot be written — a toggle the
-   * user pressed must never be reported as saved when it was not.
+   * uid is in effect, when the expected account no longer matches (a stale
+   * card from before an account switch), or when the preference file cannot
+   * be written — a toggle the user pressed must never be reported as saved
+   * when it was not.
    */
-  setModelVisibility?: (modelId: string, visible: boolean) => Promise<{ state: string; reason?: string }>
+  setModelVisibility?: (modelId: string, visible: boolean, expectedAccount: string) => Promise<{ state: string; reason?: string }>
   /**
    * Route path to mount. Defaults to the CN variant's path so existing callers
    * and tests keep their behaviour; the international variant passes its own.
@@ -119,9 +121,14 @@ function parseAction(text: string): WorkBuddyProbeAction | undefined {
   }
   if (action === 'set-model-visibility') {
     const model = wrapped['model']
+    const account = wrapped['account']
+    // `account` is required, not optional-with-fallback: a write that does not
+    // name the account it expects cannot be guarded, and there is no honest
+    // fallback account to assume.
     if (typeof model !== 'string' || model.trim() === '') return undefined
     if (typeof wrapped['visible'] !== 'boolean') return undefined
-    return { action: 'set-model-visibility', model: model.trim(), visible: wrapped['visible'] }
+    if (typeof account !== 'string' || account === '') return undefined
+    return { action: 'set-model-visibility', model: model.trim(), visible: wrapped['visible'], account }
   }
   if (action === 'probe') {
     const model = wrapped['model']
@@ -189,7 +196,11 @@ export function workBuddyProbeHandler(
           json(res, 404, { error: 'visibility-setting-not-supported' })
           return
         }
-        json(res, 200, await deps.setModelVisibility(action.model as string, action.visible === true))
+        json(res, 200, await deps.setModelVisibility(
+          action.model as string,
+          action.visible === true,
+          action.account as string,
+        ))
         return
       }
       json(res, 200, await deps.probe(action.model as string))

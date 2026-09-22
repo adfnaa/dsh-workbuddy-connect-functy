@@ -778,7 +778,7 @@ export function apply(ctx: Context, config: Config): void {
             return setMaximumContextWindow(enabled)
           },
         },
-        setModelVisibility: async (modelId, visible) => {
+        setModelVisibility: async (modelId, visible, expectedAccount) => {
           // Refused rather than bucketed: a signed-out variant, or a
           // credential with no uid, has no account to key the preference by,
           // and writing it anywhere else would let one account's hidden list
@@ -786,6 +786,13 @@ export function apply(ctx: Context, config: Config): void {
           const account = runtime.account()
           if (account === undefined) {
             return { state: 'failed', reason: 'model visibility needs a signed-in account with a stable user id' }
+          }
+          // Expected-account guard: the card names the account its checkboxes
+          // were rendered from. A card still showing account A while the
+          // desktop has already switched to B must not land A's toggle in B's
+          // bucket — refuse, and the card refreshes into B's own section.
+          if (expectedAccount !== account) {
+            return { state: 'stale-account', reason: 'the signed-in account changed' }
           }
           try {
             runtime.visibilityStore.setVisible(account, modelId, visible)

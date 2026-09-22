@@ -88,7 +88,11 @@ describe('model visibility card controls', () => {
     postResponse = { state: 'updated' }
     posts.length = 0
     request.mockReset().mockImplementation(async (_url: string, init?: RequestInit) => {
-      if (init?.method !== 'POST') return { ok: true, json: async () => statusBody }
+      if (init?.method !== 'POST') {
+        // A fresh document each read, like the real host: later mutations of
+        // the simulated truth must not leak into state already on screen.
+        return { ok: true, json: async () => JSON.parse(JSON.stringify(statusBody)) }
+      }
       const body = JSON.parse(String(init.body)) as Record<string, unknown>
       posts.push({ body, headers: init.headers })
       // A save the host confirms rewrites its truth before the card re-reads;
@@ -120,7 +124,7 @@ describe('model visibility card controls', () => {
   it('unchecking sends the hide action and flips the box once the host confirms', async () => {
     await mount()
     await toggle(0, false)
-    expect(posts[0]!.body).toEqual({ action: 'set-model-visibility', model: 'glm-5.3', visible: false })
+    expect(posts[0]!.body).toEqual({ action: 'set-model-visibility', model: 'glm-5.3', visible: false, account: 'u1:' })
     // The write is authorized the same way every control action is.
     expect((posts[0]!.headers as Record<string, string>)['X-Workbuddy-Probe-Key']).toBe('test-key')
     expect(checkboxStates()).toEqual([false, false, true])
@@ -129,7 +133,7 @@ describe('model visibility card controls', () => {
   it('re-checking sends the show action and restores the box', async () => {
     await mount()
     await toggle(1, true)
-    expect(posts[0]!.body).toEqual({ action: 'set-model-visibility', model: 'hy3', visible: true })
+    expect(posts[0]!.body).toEqual({ action: 'set-model-visibility', model: 'hy3', visible: true, account: 'u1:' })
     expect(checkboxStates()).toEqual([true, true, true])
   })
 
@@ -142,6 +146,26 @@ describe('model visibility card controls', () => {
     // …but the box still reports the host's truth, and the reason is on screen.
     expect(checkboxStates()).toEqual([true, false, true])
     expect(JSON.stringify(view!.toJSON())).toContain('stable user id')
+  })
+
+  it('a stale write after an account switch is refused, explained, and the list converges', async () => {
+    // The card rendered u1's checkboxes; the host adopted u2 before the click
+    // landed. The write must carry u1 as the expected account, be refused,
+    // explain itself in the user's language, and leave the checkboxes showing
+    // u2's own truth.
+    await mount()
+    expect(checkboxStates()).toEqual([true, false, true])
+    // The host switches accounts after the card's last read: the GET now
+    // answers u2's section, and the write is refused.
+    postResponse = { state: 'stale-account' }
+    statusBody['visibility'] = { account: 'u2:', disabled: [] }
+    await toggle(1, true)
+    // The write named the account it was rendered from, not the new one.
+    expect(posts[0]!.body['account']).toBe('u1:')
+    // Refused in the user's language…
+    expect(JSON.stringify(view!.toJSON())).toContain(en.visibilityStaleAccount)
+    // …and the follow-up read converged the checkboxes onto u2's section.
+    expect(checkboxStates()).toEqual([true, true, true])
   })
 
   it('renders no controls when the account has no stable uid', async () => {
