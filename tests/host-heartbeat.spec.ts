@@ -2,6 +2,25 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+
+/**
+ * `processStartTimeMs` imports `execFileSync` from `node:child_process`, whose
+ * ESM namespace cannot be spied on. Hoisted module mock: the real module is
+ * used everywhere except where a test installs fake output via
+ * {@link setWmicOutput}.
+ */
+const wmic = vi.hoisted(() => ({ output: undefined as string | undefined }))
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  return {
+    ...actual,
+    execFileSync: (...args: unknown[]) => {
+      if (wmic.output !== undefined) return wmic.output
+      return (actual.execFileSync as (...a: unknown[]) => unknown)(...args)
+    },
+  }
+})
+
 import {
   clearHostHeartbeat,
   isHeartbeatProcessAlive,
@@ -19,6 +38,8 @@ let root: string | undefined
 afterEach(async () => {
   if (root !== undefined) await rm(root, { recursive: true, force: true })
   root = undefined
+  wmic.output = undefined
+  vi.restoreAllMocks()
   vi.unstubAllEnvs()
 })
 
@@ -144,5 +165,52 @@ describe('parseWmiCreationDate (CIM_DATETIME)', () => {
     expect(parseWmiCreationDate('20261323104314.239907+000')).toBeUndefined()
     expect(parseWmiCreationDate('20260932104314.239907+000')).toBeUndefined()
     expect(parseWmiCreationDate('20260923254314.239907+000')).toBeUndefined()
+  })
+})
+
+describe('processStartTimeMs wmic token extraction (production path)', () => {
+  /**
+   * The production branch looks up its own datetime token in `wmic` output
+   * before handing it to {@link parseWmiCreationDate}. That extraction step is
+   * a second, independent chance to partially match: a bare
+   * `(\d{14})\.(\d+)([+-]\d{3})` would cut `...+4800` down to `...+480`, which
+   * then sails through the strict parser as a *valid* token and produces a
+   * wrong epoch. The parser-level tests above cannot catch that, because they
+   * never see the truncated string. These tests drive the real win32 branch
+   * with stubbed `wmic` output.
+   */
+
+  /** Real wmic output: a `CreationDate` header, the value, then a blank line. */
+  const wmicOutput = (value: string): string => `CreationDate\n${value}\n\n`
+
+  /**
+   * Drive the real win32 branch: fake the platform, and let the hoisted
+   * `node:child_process` mock hand `processStartTimeMs` this output.
+   */
+  function withWindowsWmic(output: string, run: () => void): void {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32')
+    wmic.output = output
+    run()
+  }
+
+  it('parses the real UTC+8 wmic value into the correct epoch', () => {
+    withWindowsWmic(wmicOutput('20260923104314.239907+480'), () => {
+      // 10:43:14 local at UTC+8 is 02:43:14Z; the offset must be subtracted.
+      expect(new Date(processStartTimeMs(1234)!).toISOString()).toBe('2026-09-23T02:43:14.000Z')
+    })
+  })
+
+  it('returns undefined for a 4-digit offset instead of matching its first 3 digits', () => {
+    withWindowsWmic(wmicOutput('20260923104314.239907+4800'), () => {
+      // Must degrade to the PID-only fallback, not report a truncated `+480`
+      // epoch that would look trustworthy to the recycled-PID guard.
+      expect(processStartTimeMs(1234)).toBeUndefined()
+    })
+  })
+
+  it('returns undefined when wmic prints no datetime token at all', () => {
+    withWindowsWmic('CreationDate\n\n\n', () => {
+      expect(processStartTimeMs(1234)).toBeUndefined()
+    })
   })
 })

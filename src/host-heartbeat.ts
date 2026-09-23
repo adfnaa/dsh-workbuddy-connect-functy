@@ -151,7 +151,14 @@ export function processStartTimeMs(pid: number): number | undefined {
       // Extract the datetime token from the header/value output, then parse it
       // strictly; a value that does not match (or no value at all) degrades to
       // the PID-only fallback via `undefined`.
-      const token = out.match(/(\d{14})\.(\d+)([+-]\d{3})/)?.[0]
+      //
+      // The trailing boundary is what keeps this from laundering malformed
+      // input into a well-formed token: without it `...+4800` would be
+      // truncated to `...+480`, which then passes the strict parser and
+      // silently yields a wrong epoch. Require whitespace or end-of-output
+      // after the offset so a 4-digit offset is rejected, not partially
+      // matched.
+      const token = out.match(/(\d{14})\.(\d+)([+-]\d{3})(?=\s|$)/)?.[0]
       if (token === undefined) return undefined
       return parseWmiCreationDate(token)
     }
