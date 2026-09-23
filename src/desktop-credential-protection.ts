@@ -25,8 +25,10 @@
  */
 
 import { execFile } from 'node:child_process'
-import { accessSync, constants } from 'node:fs'
+import { accessSync, constants, realpathSync } from 'node:fs'
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { join } from 'node:path'
+import type { WorkBuddySignedOutReasonCode } from './status-paths.ts'
 
 /** The four states a desktop auth document can be read as. */
 export type DesktopAuthFormat = 'absent' | 'plaintext' | 'encrypted' | 'unrecognized'
@@ -306,6 +308,62 @@ interface ResolvedKey {
 /** The spawned helper. Separated from the provider so tests can stand it in. */
 export type WorkBuddyKeyPayloadSource = () => Promise<string>
 
+/**
+ * Which automatic discovery, if any, this provider may run when no explicit
+ * binary is configured.
+ *
+ * `none` is the safe default: a provider that has not been told which product
+ * it serves must not reach for another product's app. `macos-workbuddy` is the
+ * CN line — the only one whose at-rest credentials and app layout have been
+ * verified live — and resolves the platform default and then Spotlight.
+ */
+export type WorkBuddyElectronDiscovery = 'none' | 'macos-workbuddy'
+
+/** The CN app's bundle id; the only one this round resolves by discovery. */
+export const WORKBUDDY_CN_BUNDLE_ID = 'com.tencent.workbuddy.mac'
+
+/** Absolute tool paths: never resolved through PATH, which a user can change. */
+const MDFIND_BIN = '/usr/bin/mdfind'
+const PLUTIL_BIN = '/usr/bin/plutil'
+
+/** One discovery subprocess's own limits; see {@link WorkBuddyAtRestKeyProviderOptions}. */
+export const WORKBUDDY_DISCOVERY_STEP_TIMEOUT_MS = 3_000
+/** Whole-discovery budget, independent of the helper's own timeout. */
+export const WORKBUDDY_DISCOVERY_BUDGET_MS = 10_000
+const MDFIND_MAX_OUTPUT_BYTES = 1024 * 1024
+const PLUTIL_MAX_OUTPUT_BYTES = 64 * 1024
+
+/**
+ * Why a discovery step could not produce an answer. Every one of these means
+ * "we do not know", explicitly *not* "the candidate does not exist" — the
+ * distinction is what keeps a half-finished check from being mistaken for a
+ * unique candidate.
+ */
+class DiscoveryIncompleteError extends Error {}
+
+/** A discovered app: its `.app` bundle and the Electron binary inside it. */
+interface DiscoveredApp {
+  bundlePath: string
+  electronPath: string
+  /** Display version, best effort; absent when unreadable. */
+  version?: string
+}
+
+/** Seams the discovery flow runs through, so tests never spawn a process. */
+export interface WorkBuddyDiscoveryTools {
+  /** Candidate `.app` bundles for the CN bundle id, or a throw for an unusable tool. */
+  findApps: (signal: AbortSignal) => Promise<readonly string[]>
+  /**
+   * `CFBundleIdentifier` of a bundle, or `undefined` when the tool could not
+   * read it — which is "we could not check this candidate", never "it does not
+   * match". A successful read of a *different* id returns that id, and the
+   * caller excludes the candidate.
+   */
+  bundleIdentifier: (bundlePath: string, signal: AbortSignal) => Promise<string | undefined>
+  /** Display version, best effort; `undefined` when unavailable. */
+  bundleVersion: (bundlePath: string, signal: AbortSignal) => Promise<string | undefined>
+}
+
 /** Provider options. */
 export interface WorkBuddyAtRestKeyProviderOptions {
   /** Explicit Electron binary; overrides the platform default and env. */
@@ -315,35 +373,167 @@ export interface WorkBuddyAtRestKeyProviderOptions {
   /**
    * Where the payload comes from. Defaults to spawning WorkBuddy's own
    * Electron with `ELECTRON_RUN_AS_NODE=1`; tests supply a stand-in so no
-   * test ever touches the real binary or a real key.
+   * test ever touches the real binary or a real key. Supplying this replaces
+   * path *resolution* too, so tests about resolution use
+   * {@link spawnHelper} instead.
    */
   source?: WorkBuddyKeyPayloadSource
+  /**
+   * Runs the helper at the resolved path. Distinct from {@link source}, which
+   * replaces the whole payload path: this seam keeps resolution — explicit
+   * config, platform default, discovery — real, so tests can exercise it
+   * without spawning anything.
+   */
+  spawnHelper?: (electronPath: string) => Promise<string>
+  /**
+   * Automatic discovery budget; defaults to `'none'` (see
+   * {@link WorkBuddyElectronDiscovery}). Passed explicitly per variant at the
+   * composition root, never inferred from the environment.
+   */
+  discovery?: WorkBuddyElectronDiscovery
+  /**
+   * Platform default binary, consulted only when `discovery` is enabled and no
+   * explicit path is configured. Injectable so tests can force the fallback
+   * branch without moving the real app; `null` means "no default here".
+   */
+  defaultElectronPath?: string | undefined
+  /** Discovery subprocesses; injectable so tests never spawn. */
+  tools?: WorkBuddyDiscoveryTools
+}
+
+/**
+ * The default discovery tools: Spotlight for the bundle, `/usr/bin/plutil` for
+ * identity. Every failure that means "we could not tell" — a missing tool, a
+ * timeout, an oversized answer — is raised as {@link DiscoveryIncompleteError}
+ * so it can never be silently read as "no such app".
+ */
+export function workBuddyDiscoveryTools(): WorkBuddyDiscoveryTools {
+  const runTool = (bin: string, args: readonly string[], maxBytes: number, signal: AbortSignal): Promise<string> =>
+    new Promise<string>((resolve, reject) => {
+      if (signal.aborted) {
+        reject(new DiscoveryIncompleteError(`${bin} was not started: the discovery budget was already spent`))
+        return
+      }
+      let settled = false
+      const child = execFile(bin, [...args], { maxBuffer: maxBytes, timeout: WORKBUDDY_DISCOVERY_STEP_TIMEOUT_MS }, (error, stdout) => {
+        if (settled) return
+        settled = true
+        if (error !== null && error !== undefined) {
+          reject(new DiscoveryIncompleteError(`${bin} could not complete (${error.killed === true ? 'timed out' : String(error.code ?? 'unavailable')})`))
+          return
+        }
+        resolve(stdout)
+      })
+      const abort = (): void => {
+        if (settled) return
+        settled = true
+        child.kill()
+        reject(new DiscoveryIncompleteError(`${bin} was abandoned: the discovery budget was spent`))
+      }
+      signal.addEventListener('abort', abort, { once: true })
+      child.on('close', () => { signal.removeEventListener('abort', abort) })
+    })
+
+  return {
+    findApps: async signal => {
+      const out = await runTool(
+        MDFIND_BIN,
+        [`kMDItemCFBundleIdentifier == '${WORKBUDDY_CN_BUNDLE_ID}'`],
+        MDFIND_MAX_OUTPUT_BYTES,
+        signal,
+      )
+      return out.split('\n').map(line => line.trim()).filter(line => line.endsWith('.app'))
+    },
+    bundleIdentifier: async (bundlePath, signal) => {
+      try {
+        const out = await runTool(
+          PLUTIL_BIN,
+          ['-extract', 'CFBundleIdentifier', 'raw', '-o', '-', join(bundlePath, 'Contents', 'Info.plist')],
+          PLUTIL_MAX_OUTPUT_BYTES,
+          signal,
+        )
+        return out.trim()
+      } catch {
+        // An unreadable plist is "we could not check this one", not "this one
+        // does not match" — the candidate stays unresolved and the whole
+        // discovery reports incomplete rather than quietly dropping it.
+        return undefined
+      }
+    },
+    bundleVersion: async (bundlePath, signal) => {
+      try {
+        const out = await runTool(
+          PLUTIL_BIN,
+          ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', join(bundlePath, 'Contents', 'Info.plist')],
+          PLUTIL_MAX_OUTPUT_BYTES,
+          signal,
+        )
+        const version = out.trim()
+        return version === '' ? undefined : version
+      } catch {
+        return undefined
+      }
+    },
+  }
 }
 
 /**
  * In-memory protector-key resolver: one spawn per key id, single-flight, never
  * persisted. The cache is keyed by the id envelopes ask for, so an envelope
  * sealed under a rotated key triggers exactly one fresh resolution.
- */
-export class WorkBuddyAtRestKeyProvider {
-  private readonly electronPath: string | undefined
+ */export class WorkBuddyAtRestKeyProvider {
+  /**
+   * The explicit binary, when one was configured. `undefined` here means "the
+   * caller did not name one", which is what lets discovery run — an explicit
+   * path that turns out to be unusable is an error, never a reason to look for
+   * a different app.
+   */
+  private readonly explicitPath: string | undefined
+  private readonly defaultPath: string | undefined
+  private readonly discovery: WorkBuddyElectronDiscovery
+  private readonly tools: WorkBuddyDiscoveryTools
   private readonly timeoutMs: number
   private readonly source: WorkBuddyKeyPayloadSource
+  private readonly spawnHelper: (electronPath: string) => Promise<string>
+  /**
+   * The path discovery settled on, cached only on success. A failure leaves
+   * this unset so the next attempt tries again — the user may install or move
+   * the app without restarting DSH.
+   */
+  private discoveredPath: string | undefined
   private cache: ResolvedKey | undefined
   private inflight: Promise<ResolvedKey> | undefined
 
   constructor(options: WorkBuddyAtRestKeyProviderOptions = {}) {
     const fromEnv = process.env[WORKBUDDY_ELECTRON_BIN_ENV]?.trim()
-    this.electronPath = options.electronPath
-      ?? (fromEnv !== undefined && fromEnv !== '' ? fromEnv : undefined)
-      ?? defaultWorkBuddyElectronPath()
+    const envPath = fromEnv === undefined || fromEnv === '' ? undefined : fromEnv
+    // Explicit sources are authoritative and mutually exclusive with
+    // discovery: naming a binary means "use this one", so an unusable one is
+    // an error, not an invitation to go looking for another app.
+    this.explicitPath = options.electronPath ?? envPath
+    this.discovery = options.discovery ?? 'none'
+    this.defaultPath = options.defaultElectronPath === undefined
+      ? defaultWorkBuddyElectronPath()
+      : options.defaultElectronPath ?? undefined
+    this.tools = options.tools ?? workBuddyDiscoveryTools()
     this.timeoutMs = options.timeoutMs ?? 10_000
+    this.spawnHelper = options.spawnHelper ?? (path => this.spawnAt(path))
     this.source = options.source ?? (() => this.spawnPayload())
   }
 
-  /** The binary the default helper would use, for diagnostics. */
+  /**
+   * The binary the default helper would use, for diagnostics.
+   *
+   * Reports a *discovery result* once one exists, so diagnostics describe what
+   * would actually run rather than the default that was bypassed. Discovery
+   * itself stays in {@link resolveElectronPath}: this accessor never triggers a
+   * search (the constructor must remain I/O-free, and callers may ask before
+   * any resolution has happened).
+   */
   helperPath(): string | undefined {
-    return this.electronPath
+    if (this.explicitPath !== undefined) return this.explicitPath
+    if (this.discovery === 'none') return undefined
+    return this.discoveredPath ?? this.defaultPath
   }
 
   /**
@@ -385,19 +575,144 @@ export class WorkBuddyAtRestKeyProvider {
     return resolved
   }
 
-  private async spawnPayload(): Promise<string> {
-    const electronPath = this.electronPath
-    if (electronPath === undefined) {
-      throw new Error(
-        `no WorkBuddy Electron binary is known for ${process.platform};`
+  /**
+   * The binary to spawn, or a diagnosable error saying why there is none.
+   *
+   * Order is the contract: an explicit path is used as-is and never falls back;
+   * discovery runs only for a provider that was configured for it, and only
+   * after the platform default has been tried and found unusable.
+   */
+  private async resolveElectronPath(): Promise<string> {
+    if (this.explicitPath !== undefined) {
+      if (!isExecutable(this.explicitPath)) {
+        throw new WorkBuddyElectronPathError(
+          'electron-path-invalid',
+          `the configured WorkBuddy Electron binary is not available at ${this.explicitPath};`
+          + ` check ${WORKBUDDY_ELECTRON_BIN_ENV} or unset it to let the plugin look for the app itself`,
+        )
+      }
+      return this.explicitPath
+    }
+    if (this.discovery === 'none') {
+      // Either the other product, or a platform with no verified layout. Both
+      // are "not configured", never "we searched and failed".
+      throw new WorkBuddyElectronPathError(
+        'electron-binary-unavailable',
+        `no WorkBuddy Electron binary is configured for this platform;`
         + ` set ${WORKBUDDY_ELECTRON_BIN_ENV} to the app's Electron binary`,
       )
     }
-    try {
-      accessSync(electronPath, constants.X_OK)
-    } catch {
-      throw new Error(`the WorkBuddy Electron binary is not available at ${electronPath}; set ${WORKBUDDY_ELECTRON_BIN_ENV} if it lives elsewhere`)
+    // The default path is the ordinary case and costs one stat; discovery is
+    // reserved for the installations the default misses.
+    if (this.defaultPath !== undefined && isExecutable(this.defaultPath)) return this.defaultPath
+    // A previously discovered path is re-checked rather than trusted: the app
+    // may have been moved or removed since, and a stale path must not win.
+    if (this.discoveredPath !== undefined) {
+      if (isExecutable(this.discoveredPath)) return this.discoveredPath
+      this.discoveredPath = undefined
     }
+    const found = await this.discoverMacosApp()
+    this.discoveredPath = found
+    return found
+  }
+
+  /**
+   * Resolve the CN app through Spotlight, then prove each candidate's identity
+   * before it can be executed.
+   *
+   * The whole flow shares one budget: a hang in one candidate must not extend
+   * the wait for the others, and running out of budget is reported as an
+   * unfinished check rather than an absent app.
+   */
+  private async discoverMacosApp(): Promise<string> {
+    if (process.platform !== 'darwin') {
+      throw new WorkBuddyElectronPathError(
+        'electron-binary-unavailable',
+        `no WorkBuddy Electron binary is configured for this platform;`
+        + ` set ${WORKBUDDY_ELECTRON_BIN_ENV} to the app's Electron binary`,
+      )
+    }
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), WORKBUDDY_DISCOVERY_BUDGET_MS)
+    try {
+      let candidates: readonly string[]
+      try {
+        candidates = await this.tools.findApps(controller.signal)
+      } catch {
+        throw discoveryIncomplete('the app search did not complete')
+      }
+      // Several Spotlight rows can name one bundle (path aliases, the
+      // /System/Volumes/Data view). Identity + realpath collapse those into
+      // one candidate; only genuinely distinct apps may count as "more than
+      // one", or a single app would look ambiguous.
+      const seen = new Map<string, DiscoveredApp>()
+      let unresolved = false
+      for (const candidate of candidates) {
+        let bundleIdentifier: string | undefined
+        try {
+          bundleIdentifier = await this.tools.bundleIdentifier(candidate, controller.signal)
+        } catch {
+          unresolved = true
+          continue
+        }
+        if (bundleIdentifier === undefined) {
+          unresolved = true
+          continue
+        }
+        if (bundleIdentifier !== WORKBUDDY_CN_BUNDLE_ID) continue
+        const electronPath = join(candidate, 'Contents', 'MacOS', 'Electron')
+        if (!isExecutable(electronPath)) continue
+        let identity: string
+        try {
+          identity = realpathSync(candidate)
+        } catch {
+          identity = candidate
+        }
+        if (seen.has(identity)) continue
+        let version: string | undefined
+        try {
+          version = await this.tools.bundleVersion(candidate, controller.signal)
+        } catch {
+          // Version is display-only; an unreadable one must not sink an
+          // otherwise identified candidate.
+          version = undefined
+        }
+        seen.set(identity, { bundlePath: candidate, electronPath, ...version === undefined ? {} : { version } })
+      }
+      if (seen.size > 1) {
+        const listed = [...seen.values()]
+          .map(app => `  - ${app.bundlePath}${app.version === undefined ? '' : ` (${app.version})`}`)
+          .join('\n')
+        throw new WorkBuddyElectronPathError(
+          'electron-binary-ambiguous',
+          `more than one WorkBuddy application was found, so none was chosen:\n${listed}\n`
+          + ` set ${WORKBUDDY_ELECTRON_BIN_ENV} to the one to use`,
+        )
+      }
+      // A candidate nobody could check might have been a second copy, so its
+      // existence forbids claiming the rest are unique. This is the difference
+      // between "we know there is exactly one" and "we only found one of the
+      // ones we could read" (§3.4).
+      if (unresolved) throw discoveryIncomplete('some candidates could not be checked')
+      if (seen.size === 0) {
+        throw new WorkBuddyElectronPathError(
+          'electron-binary-not-found',
+          'no WorkBuddy application was found in the default location or the system index;'
+          + ' if WorkBuddy is installed elsewhere, it may not be indexed yet',
+        )
+      }
+      return [...seen.values()][0]!.electronPath
+    } finally {
+      clearTimeout(timer)
+      controller.abort()
+    }
+  }
+
+  private async spawnPayload(): Promise<string> {
+    return await this.spawnHelper(await this.resolveElectronPath())
+  }
+
+  private async spawnAt(electronPath: string): Promise<string> {
     return await new Promise<string>((resolve, reject) => {
       execFile(electronPath, [HELPER_SCRIPT_ARGUMENT_FLAG, HELPER_SCRIPT], {
         timeout: this.timeoutMs,
@@ -413,18 +728,62 @@ export class WorkBuddyAtRestKeyProvider {
             : error.code !== undefined
               ? `exited with code ${String(error.code)}`
               : 'could not be started'
-          reject(new Error(`the WorkBuddy key helper (${electronPath}) ${reason}`))
+          reject(new WorkBuddyElectronPathError(
+            'encrypted-credential-unreadable',
+            `the WorkBuddy key helper (${electronPath}) ${reason}`,
+          ))
           return
         }
         const output = stdout.trim()
         if (output === '') {
-          reject(new Error(`the WorkBuddy key helper (${electronPath}) produced no payload`))
+          reject(new WorkBuddyElectronPathError(
+            'encrypted-credential-unreadable',
+            `the WorkBuddy key helper (${electronPath}) produced no payload`,
+          ))
           return
         }
         resolve(output)
       })
     })
   }
+}
+
+/** Whether a path exists and is executable; never throws. */
+function isExecutable(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * A failure the card must be able to classify. The code travels with the error
+ * so the store can promote it to `reasonCode` without re-deriving the cause
+ * from prose.
+ */
+export class WorkBuddyElectronPathError extends Error {
+  readonly reasonCode: WorkBuddySignedOutReasonCode
+
+  constructor(reasonCode: WorkBuddySignedOutReasonCode, message: string) {
+    super(message)
+    this.name = 'WorkBuddyElectronPathError'
+    this.reasonCode = reasonCode
+  }
+}
+
+/** Read the reason code off an arbitrary thrown value, when it carries one. */
+export function reasonCodeOf(error: unknown): WorkBuddySignedOutReasonCode | undefined {
+  return error instanceof WorkBuddyElectronPathError ? error.reasonCode : undefined
+}
+
+function discoveryIncomplete(detail: string): WorkBuddyElectronPathError {
+  return new WorkBuddyElectronPathError(
+    'electron-discovery-incomplete',
+    `the WorkBuddy application search did not finish (${detail});`
+    + ' this is not proof that the app is missing',
+  )
 }
 
 /**

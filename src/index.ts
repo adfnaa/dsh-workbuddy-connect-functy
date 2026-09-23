@@ -623,22 +623,27 @@ export function apply(ctx: Context, config: Config): void {
    */
   const lastAccounts = new Map<string, string>()
 
-  // One at-rest key provider shared by both variants — an implementation
-  // choice for one spawn and one in-memory cache, not a claim about key
-  // sharing: only the CN WorkBuddy 5.6.2 install has been verified to hold
-  // the key its envelopes name; a Global (WorkBuddy AI) encrypted credential
-  // has never been seen live. If an envelope ever names a key the shared
-  // resolution cannot match, the provider fails with a keyId-mismatch
-  // diagnosis rather than a wrong open. The helper only runs if an encrypted
-  // desktop credential is actually read.
-  const atRestKeys = new WorkBuddyAtRestKeyProvider()
+  // One at-rest key provider per variant. The difference is the discovery
+  // setting, and it is deliberate: only the CN WorkBuddy install has been
+  // verified to hold the key its envelopes name, and only its macOS layout is
+  // known, so CN may look for the app by bundle id. A Global (WorkBuddy AI)
+  // encrypted credential has never been seen live, so that provider is left
+  // exactly as it was — default path only, never Spotlight. Sharing one
+  // provider would let a Global unlock silently execute the *CN* app's
+  // Electron, because the provider cannot tell which variant is asking.
+  // A keyId mismatch is still reported as a diagnosis rather than a wrong
+  // open, and the helper only runs if an encrypted credential is read.
+  const atRestKeysFor = (variant: WorkBuddyVariant): WorkBuddyAtRestKeyProvider =>
+    new WorkBuddyAtRestKeyProvider({
+      discovery: variant.id === CN_VARIANT.id ? 'macos-workbuddy' : 'none',
+    })
   const runtimes = WORKBUDDY_VARIANTS.map(variant => createVariantRuntime(
     config,
     variant,
     () => current(),
     id => lastIdentities.get(id),
     id => lastAccounts.get(id),
-    atRestKeys,
+    atRestKeysFor(variant),
   ))
 
   // Same-origin routes backing each Plugin-configuration card; the webServer

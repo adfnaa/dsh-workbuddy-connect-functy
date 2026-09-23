@@ -8,8 +8,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { WORKBUDDY_AI_PROBE_PATH, WORKBUDDY_AI_STATUS_PATH, WORKBUDDY_PROBE_PATH, WORKBUDDY_STATUS_PATH } from '../status-paths.ts'
-import type { WorkBuddyWebModelBadge, WorkBuddyWebProbeSection, WorkBuddyWebStatus, WorkBuddyWebVisibilitySection } from '../status-paths.ts'
+import { WORKBUDDY_AI_PROBE_PATH, WORKBUDDY_AI_STATUS_PATH, WORKBUDDY_PROBE_PATH, WORKBUDDY_STATUS_PATH, isWorkBuddySignedOutReasonCode } from '../status-paths.ts'
+import type { WorkBuddySignedOutReasonCode, WorkBuddyWebModelBadge, WorkBuddyWebProbeSection, WorkBuddyWebStatus, WorkBuddyWebVisibilitySection } from '../status-paths.ts'
 import { isWorkBuddyWebStatus } from './status-document.ts'
 import type { WorkBuddySettingsKey } from './locales.ts'
 
@@ -37,6 +37,14 @@ export interface WorkBuddyCardVariant {
   signedOutKey: WorkBuddySettingsKey
   statusPath: string
   probePath: string
+  /**
+   * The product's own name, used verbatim inside the Agent prompt. Taken from
+   * the variant rather than derived from a reason code: the two products fail
+   * in the same shapes, so nothing in the failure says which name is right.
+   */
+  appName: string
+  /** Locale key for "no decryption program is configured" on this product. */
+  unavailableKey: WorkBuddySettingsKey
 }
 
 /** CN WorkBuddy; the plugin's long-standing card and default. */
@@ -47,6 +55,8 @@ export const CN_CARD_VARIANT: WorkBuddyCardVariant = {
   signedOutKey: 'signedOutHint',
   statusPath: WORKBUDDY_STATUS_PATH,
   probePath: WORKBUDDY_PROBE_PATH,
+  appName: 'WorkBuddy',
+  unavailableKey: 'assistUnavailableCN',
 }
 
 /** International WorkBuddy AI. */
@@ -57,6 +67,8 @@ export const AI_CARD_VARIANT: WorkBuddyCardVariant = {
   signedOutKey: 'signedOutHintAI',
   statusPath: WORKBUDDY_AI_STATUS_PATH,
   probePath: WORKBUDDY_AI_PROBE_PATH,
+  appName: 'WorkBuddy AI',
+  unavailableKey: 'assistUnavailableAI',
 }
 
 /** Both cards, in display order. */
@@ -65,6 +77,102 @@ export const CARD_VARIANTS: readonly WorkBuddyCardVariant[] = [CN_CARD_VARIANT, 
 export type WorkBuddyPluginCardProps = Partial<WorkBuddyPluginCardInjected>
 
 const POLL_INTERVAL_MS = 60_000
+
+/**
+ * The reason codes whose failures the Agent assist block covers: the plugin
+ * cannot reach a decryption program, for any of the five reasons in §5.5.
+ *
+ * This is the *only* place the card decides whether the block applies. It
+ * branches on the code, never on `reason` text: the prose is written for a
+ * human and is expected to change, so matching it would silently stop
+ * matching after any wording edit.
+ *
+ * `encrypted-credential-unreadable` is deliberately absent — the app was found
+ * and ran, so "look for the app" is not the fix for it.
+ */
+const ASSIST_REASON_CODES: readonly WorkBuddySignedOutReasonCode[] = [
+  'electron-binary-not-found',
+  'electron-binary-ambiguous',
+  'electron-binary-unavailable',
+  'electron-path-invalid',
+  'electron-discovery-incomplete',
+]
+
+/** Locale key for one failure's summary inside the Agent prompt. */
+function assistSummaryKey(code: WorkBuddySignedOutReasonCode, variant: WorkBuddyCardVariant): WorkBuddySettingsKey {
+  switch (code) {
+    case 'electron-binary-not-found': return 'assistNotFound'
+    case 'electron-binary-ambiguous': return 'assistAmbiguous'
+    case 'electron-discovery-incomplete': return 'assistIncomplete'
+    case 'electron-path-invalid': return 'assistPathInvalid'
+    default: return variant.unavailableKey
+  }
+}
+
+/** Copy text to the clipboard, reporting whether it worked. */
+async function copyPrompt(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText === undefined) return false
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The Agent assist block for a path failure: what is wrong, one copyable
+ * request, and a re-check. Rendered only for the codes above.
+ */
+function AssistBlock(
+  { t, variant, code, busy, onRecheck }: {
+    t: (key: WorkBuddySettingsKey, params?: Record<string, unknown>) => string
+    variant: WorkBuddyCardVariant
+    code: WorkBuddySignedOutReasonCode
+    busy: boolean
+    onRecheck: () => void
+  },
+) {
+  const [copied, setCopied] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
+  const prompt = t('assistantPrompt', {
+    appName: variant.appName,
+    failureSummary: t(assistSummaryKey(code, variant)),
+  })
+  return (
+    <div style={assistStyle}>
+      <h4 style={assistHeadingStyle}>{t('assistantHeading')}</h4>
+      <p style={bodyStyle}>{t('assistantIntro')}</p>
+      <div style={assistPromptRowStyle}>
+        {/* Selectable on purpose: a failed clipboard write must still leave the
+            user a way to copy the text by hand. */}
+        <p style={assistPromptStyle}>{prompt}</p>
+        <button
+          type="button"
+          style={buttonStyle}
+          onClick={() => {
+            void (async () => {
+              const ok = await copyPrompt(prompt)
+              setCopied(ok)
+              setCopyFailed(!ok)
+            })()
+          }}
+        >
+          {t('assistantCopy')}
+        </button>
+      </div>
+      {/* `role="status"` so the copy result is announced, not just shown. */}
+      {copied ? <p style={assistFeedbackStyle} role="status">{t('assistantCopied')}</p> : null}
+      {copyFailed ? <p style={assistFeedbackStyle} role="status">{t('assistantCopyFailed')}</p> : null}
+      <p style={bodyStyle}>{t('assistantAfter')}</p>
+      <div style={rowStyle}>
+        <button type="button" style={buttonStyle} disabled={busy} onClick={onRecheck}>
+          {busy ? t('assistantRechecking') : t('assistantRecheck')}
+        </button>
+      </div>
+    </div>
+  )
+}
 
 const cardStyle: CSSProperties = {
   overflow: 'hidden',
@@ -112,6 +220,15 @@ const modelOfferStyle: CSSProperties = { display: 'flex', flexDirection: 'column
 const modelRateStyle: CSSProperties = { fontSize: 12, lineHeight: '18px', color: 'var(--dsw-alias-label-tertiary)' }
 const contextPreferenceStyle: CSSProperties = { display: 'flex', alignItems: 'flex-start', gap: 9, padding: '10px 12px', border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 8, color: 'var(--dsw-alias-label-primary)', fontSize: 13, lineHeight: '20px' }
 const contextPreferenceCopyStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 2 }
+/**
+ * The Agent assist block. Sits beside the existing error line rather than
+ * replacing it: the short diagnosis stays the headline, this adds the way out.
+ */
+const assistStyle: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 14px', marginTop: 12, border: '1px solid var(--dsw-alias-border-l2)', borderRadius: 10, background: 'var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.04))' }
+const assistHeadingStyle: CSSProperties = { margin: 0, fontSize: 14, lineHeight: '20px', fontWeight: 600, color: 'var(--dsw-alias-label-primary)' }
+const assistPromptRowStyle: CSSProperties = { display: 'flex', flexWrap: 'wrap', alignItems: 'flex-start', gap: 8, padding: '8px 9px 8px 11px', borderRadius: 7, background: 'var(--dsw-alias-bg-layer-1)' }
+const assistPromptStyle: CSSProperties = { flex: '1 1 220px', minWidth: 0, margin: 0, color: 'var(--dsw-alias-label-primary)', fontSize: 12, lineHeight: '19px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', userSelect: 'text' }
+const assistFeedbackStyle: CSSProperties = { margin: 0, fontSize: 12, lineHeight: '19px', color: 'var(--dsw-alias-label-secondary)' }
 /**
  * Left half of one merged context/visibility row: the visibility checkbox (when
  * the account has one) beside the model's name and rate. Kept as a flex span so
@@ -928,6 +1045,16 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
   }, [control])
 
   const title = t(variant.titleKey)
+  /**
+   * The failure the assist block covers, when this document has one. Computed
+   * once so the block and the header's refresh button agree on whether the
+   * block owns the re-check action — showing both would put two buttons with
+   * the same effect side by side.
+   */
+  const assistCode = status?.status === 'signed-out' && isWorkBuddySignedOutReasonCode(status.reasonCode)
+    && ASSIST_REASON_CODES.includes(status.reasonCode)
+    ? status.reasonCode
+    : undefined
   /*
    * `undefined` is "not read yet" and gets its own copy. It is not signed-out:
    * claiming that would be false for a user who is in fact signed in.
@@ -969,9 +1096,13 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
                 <span aria-hidden="true" style={dotStyle(status === undefined ? 'loading' : status.status)} />
                 <span>{label}</span>
               </div>
-              <button type="button" style={buttonStyle} disabled={busy} onClick={() => { void manualRefresh() }}>
-                {busy ? t('refreshing') : t('refresh')}
-              </button>
+              {/* The assist block carries the re-check in this state, so the
+                  header button steps aside rather than duplicating it. */}
+              {assistCode === undefined
+                ? <button type="button" style={buttonStyle} disabled={busy} onClick={() => { void manualRefresh() }}>
+                    {busy ? t('refreshing') : t('refresh')}
+                  </button>
+                : null}
             </div>
             {/*
               * A failed read is reported beside the document still on screen,
@@ -1151,9 +1282,26 @@ export function WorkBuddyPluginCard({ t, variant = CN_CARD_VARIANT }: WorkBuddyP
               // A mismatch explanation replaces the generic hint: telling a user
               // to "sign in" is wrong advice when a credential was found and
               // rejected for belonging to the other product.
-              ? <p style={status.reason === undefined ? bodyStyle : errorStyle}>
-                  {status.reason ?? t(variant.signedOutKey)}
-                </p>
+              ? <>
+                  <p style={status.reason === undefined ? bodyStyle : errorStyle}>
+                    {status.reason ?? t(variant.signedOutKey)}
+                  </p>
+                  {/*
+                    * The assist block appears only for the failures a search or
+                    * a configuration could fix. The code is narrowed here — the
+                    * wire value is not guaranteed to be in the enum — and the
+                    * decision is made on the code alone, never on `reason`.
+                    */}
+                  {assistCode === undefined
+                    ? null
+                    : <AssistBlock
+                        t={t}
+                        variant={variant}
+                        code={assistCode}
+                        busy={busy}
+                        onRecheck={() => { void manualRefresh() }}
+                      />}
+                </>
               : null}
             {status?.status === 'error' ? <p style={errorStyle}>{status.message}</p> : null}
           </div>

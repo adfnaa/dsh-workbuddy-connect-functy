@@ -94,12 +94,20 @@ export async function workBuddyWebStatus(
 ): Promise<WorkBuddyWebStatus> {
   const authStatus = await deps.store.status()
   if (authStatus.state !== 'signed-in') {
-    // A diagnosable sign-out (a credential for the *other* product) keeps its
-    // explanation: falling back to the generic hint would tell the user to sign
-    // in when the real fix is to correct a path.
+    // A diagnosable sign-out (a credential for the *other* product, or an
+    // unusable key helper) keeps its explanation: falling back to the generic
+    // hint would tell the user to sign in when the real fix is to correct a
+    // path or point the plugin at the app. `reasonCode` rides along so the
+    // card can branch on the cause without reading the prose.
+    //
+    // This branch deliberately does not run `safeMessage`: the reason is
+    // produced by the store and is expected to be a short, path-only
+    // diagnosis, so any new failure path added here must keep credentials,
+    // payloads and subprocess output out of its own message.
     return {
       status: 'signed-out',
       ...authStatus.reason === undefined ? {} : { reason: authStatus.reason },
+      ...authStatus.reasonCode === undefined ? {} : { reasonCode: authStatus.reasonCode },
     }
   }
   const status: WorkBuddyWebStatus = {

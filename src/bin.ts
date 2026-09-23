@@ -8,6 +8,7 @@ import { WorkBuddyUpstreamClient } from './upstream.ts'
 import { FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS } from './catalog.ts'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
 import { isHeartbeatProcessAlive, readHostHeartbeat, workbuddyHostHeartbeatPath } from './host-heartbeat.ts'
+import { WorkBuddyAtRestKeyProvider } from './desktop-credential-protection.ts'
 import { CN_VARIANT, variantFor, WORKBUDDY_VARIANTS, type WorkBuddyVariant } from './variants.ts'
 import { resolveAppVersion } from './app-version.ts'
 
@@ -42,12 +43,23 @@ function printJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value)}\n`)
 }
 
-/** One variant's store plus the client that performs its refreshes. */
+/**
+ * One variant's store plus the client that performs its refreshes.
+ *
+ * The key provider is injected explicitly, and per variant, for the same
+ * reason the plugin host does it: discovery is CN/macOS-only, so the provider
+ * must not be left to its no-arg default — that default is deliberately
+ * `discovery: 'none'`, and relying on it here would quietly strip the CN CLI
+ * of the decryption it has always had.
+ */
 function makeStore(variant: WorkBuddyVariant): WorkBuddyCredentialStore {
   const client = new WorkBuddyUpstreamClient()
   return new WorkBuddyCredentialStore({
     variant,
     refresh: credential => client.refreshToken(credential),
+    keyProvider: new WorkBuddyAtRestKeyProvider({
+      discovery: variant.id === CN_VARIANT.id ? 'macos-workbuddy' : 'none',
+    }),
   })
 }
 

@@ -16,12 +16,15 @@ import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { regionOf } from './upstream.ts'
 import {
   WorkBuddyAtRestKeyProvider,
+  WorkBuddyElectronPathError,
   classifyDesktopAuthDocument,
   keyIdsOf,
   openAuthField,
+  reasonCodeOf,
   unwrapDesktopAuthDocument,
 } from './desktop-credential-protection.ts'
 import type { DesktopAuthClassification, DesktopAuthFormat } from './desktop-credential-protection.ts'
+import type { WorkBuddySignedOutReasonCode } from './status-paths.ts'
 import type { WorkBuddyVariant } from './variants.ts'
 import type { WorkBuddyRefreshOutcome } from './upstream.ts'
 
@@ -53,6 +56,11 @@ export interface WorkBuddyAuthStatus {
    * Present only on `signed-out`, and never a substitute for fixing the file.
    */
   reason?: string
+  /**
+   * Machine-readable companion to {@link reason}, for callers that must branch
+   * on the cause. Never derived by matching `reason` text.
+   */
+  reasonCode?: WorkBuddySignedOutReasonCode
 }
 
 /** Constructor options; only {@link refresh} is required. */
@@ -371,7 +379,8 @@ export class WorkBuddyCredentialStore {
         if (credential === undefined) continue
         const region = regionOf(credential.domain)
         if (region !== this.variant.region) {
-          throw new Error(
+          throw new WorkBuddyElectronPathError(
+            'credential-region-mismatch',
             `${this.variant.displayName} received a ${region === 'cn' ? 'WorkBuddy (CN)' : 'WorkBuddy AI'} credential`
             + ` in its ${label} (domain ${JSON.stringify(credential.domain)});`
             + ` point ${this.variant.env} at the ${this.variant.appName} sign-in, or remove the mismatched file`,
@@ -419,7 +428,7 @@ export class WorkBuddyCredentialStore {
   async status(): Promise<WorkBuddyAuthStatus> {
     try {
       const credential = await this.current()
-      if (credential === undefined) return { state: 'signed-out' }
+      if (credential === undefined) return { state: 'signed-out', reasonCode: 'no-credential' }
       return {
         state: 'signed-in',
         expiresAtMs: credential.expiresAtMs,
@@ -429,12 +438,21 @@ export class WorkBuddyCredentialStore {
         source: credential.source,
       }
     } catch (error: unknown) {
-      // A region mismatch (or an unreadable file) is a *diagnosable* signed-out
-      // state, not a silent one: the user needs the path to the file that is
-      // wrong, and which provider it actually belongs to. Reported as a status
-      // rather than thrown, because `status()` is documented never to throw and
-      // the card renders `reason` verbatim.
-      return { state: 'signed-out', reason: error instanceof Error ? error.message : String(error) }
+      // A region mismatch (or an unreadable file, or an unusable key helper) is
+      // a *diagnosable* signed-out state, not a silent one: the user needs the
+      // path to the file that is wrong, and which provider it actually belongs
+      // to. Reported as a status rather than thrown, because `status()` is
+      // documented never to throw and the card renders `reason` verbatim.
+      //
+      // The code travels beside the prose so the card can branch on the cause
+      // without ever matching the message text.
+      return {
+        state: 'signed-out',
+        reason: error instanceof Error ? error.message : String(error),
+        ...reasonCodeOf(error) === undefined
+          ? {}
+          : { reasonCode: reasonCodeOf(error) as WorkBuddySignedOutReasonCode },
+      }
     }
   }
 

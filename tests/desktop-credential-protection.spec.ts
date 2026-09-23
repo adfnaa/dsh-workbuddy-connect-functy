@@ -261,14 +261,18 @@ describe('at-rest key provider', () => {
   it('resolves the helper path from env, then the platform default', () => {
     vi.stubEnv(WORKBUDDY_ELECTRON_BIN_ENV, '/opt/wb-electron')
     expect(new WorkBuddyAtRestKeyProvider().helperPath()).toBe('/opt/wb-electron')
-    // Blank env falls through to the platform default (verified on macOS only).
+    // Blank env falls through to the platform default, but only for a provider
+    // that was actually configured to look for the app (issue #48 §3.3): the
+    // no-arg default is 'none' so a provider that was never told which product
+    // it serves cannot reach for another product's binary.
     vi.stubEnv(WORKBUDDY_ELECTRON_BIN_ENV, '   ')
-    const provider = new WorkBuddyAtRestKeyProvider()
+    const cn = new WorkBuddyAtRestKeyProvider({ discovery: 'macos-workbuddy' })
     if (process.platform === 'darwin') {
-      expect(provider.helperPath()).toBe('/Applications/WorkBuddy.app/Contents/MacOS/Electron')
+      expect(cn.helperPath()).toBe('/Applications/WorkBuddy.app/Contents/MacOS/Electron')
     } else {
-      expect(provider.helperPath()).toBeUndefined()
+      expect(cn.helperPath()).toBeUndefined()
     }
+    expect(new WorkBuddyAtRestKeyProvider().helperPath()).toBeUndefined()
   })
 })
 
