@@ -1362,8 +1362,9 @@ declare function readHostHeartbeat(): Promise<WorkBuddyHostHeartbeat | undefined
  * - macOS / Linux: `ps -o lstart=` prints a local-time "EEE MMM DD HH:MM:SS YYYY";
  *   `Date.parse` resolves it against the local clock, which matches how
  *   `registeredAt` (a `Date.now()` absolute value) is expressed.
- * - Windows: WMI `CreationDate` is UTC (`YYYYMMDDHHMMSS.mmm+zzzz`); parsed with
- *   `Date.UTC`, again comparable to `registeredAt`.
+ * - Windows: `wmic` prints a CIM_DATETIME `CreationDate` — local fields plus a
+ *   signed minute offset (see {@link parseWmiCreationDate}); the epoch it
+ *   yields is comparable to `registeredAt`.
  *
  * Failures return `undefined` so callers can fall back to plain PID liveness
  * rather than mis-report a running host as dead.

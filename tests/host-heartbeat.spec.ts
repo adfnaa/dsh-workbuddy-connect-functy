@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   clearHostHeartbeat,
   isHeartbeatProcessAlive,
+  parseWmiCreationDate,
   processStartTimeMs,
   readHostHeartbeat,
   workbuddyHostHeartbeatPath,
@@ -97,5 +98,51 @@ describe('host heartbeat', () => {
       'utf8',
     )
     expect(await readHostHeartbeat()).toBeUndefined()
+  })
+})
+
+describe('parseWmiCreationDate (CIM_DATETIME)', () => {
+  /**
+   * Windows `wmic` prints `CreationDate` as CIM_DATETIME
+   * `yyyymmddHHMMSS.mmmmmmsUUU`: local wall-clock fields plus a 3-digit
+   * signed UTC offset **in minutes**. The epoch is the UTC-shifted fields —
+   * `+480` (UTC+8) must subtract 480 minutes, which is what the old
+   * 4-digit-offset regex never matched and never applied (issue #47).
+   */
+
+  it('parses the listed offsets into the correct epoch', () => {
+    // Zero offset: fields are already UTC.
+    expect(new Date(parseWmiCreationDate('20260923104314.239907+000')!).toISOString())
+      .toBe('2026-09-23T10:43:14.000Z')
+    // UTC+8: local 10:43:14 is 02:43:14Z.
+    expect(new Date(parseWmiCreationDate('20260923104314.239907+480')!).toISOString())
+      .toBe('2026-09-23T02:43:14.000Z')
+    // UTC+5:30 (India): 10:43:14 − 5h30m.
+    expect(new Date(parseWmiCreationDate('20260923104314.239907+330')!).toISOString())
+      .toBe('2026-09-23T05:13:14.000Z')
+    // UTC−5: 10:43:14 + 5h.
+    expect(new Date(parseWmiCreationDate('20260923104314.239907-300')!).toISOString())
+      .toBe('2026-09-23T15:43:14.000Z')
+    // Extreme offsets cross the day boundary and stay finite.
+    expect(new Date(parseWmiCreationDate('20260923104314.239907+840')!).toISOString())
+      .toBe('2026-09-22T20:43:14.000Z')
+    expect(new Date(parseWmiCreationDate('20260923104314.239907-720')!).toISOString())
+      .toBe('2026-09-23T22:43:14.000Z')
+  })
+
+  it('rejects malformed input and 4-digit offsets instead of partially matching', () => {
+    expect(parseWmiCreationDate('')).toBeUndefined()
+    expect(parseWmiCreationDate('garbage')).toBeUndefined()
+    expect(parseWmiCreationDate('20260923104314')).toBeUndefined()
+    expect(parseWmiCreationDate('20260923104314.239907')).toBeUndefined()
+    expect(parseWmiCreationDate('20260923104314.239907+48')).toBeUndefined()
+    // A 4-digit offset is not the CIM format; matching its first three digits
+    // would silently compute a wrong epoch.
+    expect(parseWmiCreationDate('20260923104314.239907+4800')).toBeUndefined()
+    expect(parseWmiCreationDate('20260923104314.239907-3000')).toBeUndefined()
+    // Date parts that Date.UTC would silently roll over are malformed too.
+    expect(parseWmiCreationDate('20261323104314.239907+000')).toBeUndefined()
+    expect(parseWmiCreationDate('20260932104314.239907+000')).toBeUndefined()
+    expect(parseWmiCreationDate('20260923254314.239907+000')).toBeUndefined()
   })
 })
