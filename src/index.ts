@@ -627,12 +627,14 @@ export function apply(ctx: Context, config: Config): void {
   // setting, and it is deliberate: only the CN WorkBuddy install has been
   // verified to hold the key its envelopes name, and only its macOS layout is
   // known, so CN may look for the app by bundle id. A Global (WorkBuddy AI)
-  // encrypted credential has never been seen live, so that provider is left
-  // exactly as it was — default path only, never Spotlight. Sharing one
-  // provider would let a Global unlock silently execute the *CN* app's
-  // Electron, because the provider cannot tell which variant is asking.
-  // A keyId mismatch is still reported as a diagnosis rather than a wrong
-  // open, and the helper only runs if an encrypted credential is read.
+  // encrypted credential has never been seen live, so that provider runs at
+  // `discovery: 'none'` — no default path and no Spotlight, which is a
+  // deliberate narrowing from the shared provider it replaces: a Global unlock
+  // must not silently execute the *CN* app's Electron, and the provider cannot
+  // tell which variant is asking. An explicit WORKBUDDY_ELECTRON_BIN still
+  // works for Global. A keyId mismatch is still reported as a diagnosis rather
+  // than a wrong open, and the helper only runs if an encrypted credential is
+  // read.
   const atRestKeysFor = (variant: WorkBuddyVariant): WorkBuddyAtRestKeyProvider =>
     new WorkBuddyAtRestKeyProvider({
       discovery: variant.id === CN_VARIANT.id ? 'macos-workbuddy' : 'none',

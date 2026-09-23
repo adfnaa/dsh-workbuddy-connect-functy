@@ -552,7 +552,8 @@ export class WorkBuddyCredentialStore {
     const text = unwrapDesktopAuthDocument(classification, field => {
       const plaintext = openAuthField(key, field.envelope)
       if (plaintext === undefined) {
-        throw new Error(
+        throw new WorkBuddyElectronPathError(
+          'encrypted-credential-unreadable',
           `the encrypted desktop credential's ${field.field} could not be decrypted`
           + ` (envelope key id ${field.envelope.keyId});`
           + ' the WorkBuddy app may hold a different at-rest key — open it once to reseal the sign-in',

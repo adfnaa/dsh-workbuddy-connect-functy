@@ -261,15 +261,18 @@ describe('#48 an unfinished check is not an absent app', () => {
 
   it('reports incomplete when one candidate could not be identified', async () => {
     const good = await fakeApp('WorkBuddy.app')
-    const unreadable = join(root, 'Broken.app')
+    // The bundle exists — so it is *not* a deleted-app exclusion — but its
+    // identity cannot be read. That is "we could not check this one", which
+    // must not be silently dropped.
+    const unreadable = await fakeApp('Broken.app')
     const provider = new WorkBuddyAtRestKeyProvider({
       discovery: 'macos-workbuddy',
       defaultElectronPath: join(root, 'absent', 'Electron'),
       tools: fakeTools({
-        findApps: async () => [good.bundlePath, unreadable],
+        findApps: async () => [good.bundlePath, unreadable.bundlePath],
         // The plutil seam answers `undefined` for "could not read", which is
         // not the same as "this one is a different product".
-        bundleIdentifier: async path => path === unreadable ? undefined : WORKBUDDY_CN_BUNDLE_ID,
+        bundleIdentifier: async path => path === unreadable.bundlePath ? undefined : WORKBUDDY_CN_BUNDLE_ID,
       }),
       spawnHelper: async () => PAYLOAD_TEXT,
     })
@@ -277,6 +280,83 @@ describe('#48 an unfinished check is not an absent app', () => {
     // guess: the unfinished candidate may be a second copy.
     const error = await provider.protectorKeyFor([KEY_ID]).catch((caught: unknown) => caught)
     expect(reasonCodeOf(error)).toBe('electron-discovery-incomplete')
+  })
+
+  it('still resolves the live app when a stale index row points at a deleted one', async () => {
+    // Spotlight keeps rows for apps deleted since its last sweep. A row whose
+    // bundle is gone is *decidable* — the app is not there — so it must be
+    // excluded rather than left unresolved, or one dead row would sink the
+    // live app standing next to it (issue #48 §3.7).
+    const good = await fakeApp('WorkBuddy.app')
+    const deleted = join(root, 'Deleted', 'WorkBuddy.app')
+    const tools = fakeTools({
+      findApps: async () => [deleted, good.bundlePath],
+      // Reading plutil for the deleted row would mean we failed to notice it
+      // was gone; throw so the regression is unambiguous.
+      bundleIdentifier: async path => {
+        if (path === deleted) throw new Error('plutil must not run for a deleted bundle')
+        return WORKBUDDY_CN_BUNDLE_ID
+      },
+    })
+    const provider = new WorkBuddyAtRestKeyProvider({
+      discovery: 'macos-workbuddy',
+      defaultElectronPath: join(root, 'absent', 'Electron'),
+      tools,
+      spawnHelper: async () => PAYLOAD_TEXT,
+    })
+    expect(await provider.protectorKeyFor([KEY_ID])).toBeInstanceOf(Buffer)
+    expect(provider.helperPath()).toBe(good.electronPath)
+  })
+
+  it('gives up on the whole search once the discovery budget is spent', async () => {
+    // A hang must not extend the wait forever: the shared budget covers the
+    // search and every candidate check, and exhausting it is an unfinished
+    // check rather than a missing app.
+    const app = await fakeApp('WorkBuddy.app')
+    const tools = fakeTools({
+      findApps: async signal => {
+        // Never resolves on its own; only the budget's abort ends it.
+        await new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        })
+        return [app.bundlePath]
+      },
+    })
+    const provider = new WorkBuddyAtRestKeyProvider({
+      discovery: 'macos-workbuddy',
+      defaultElectronPath: join(root, 'absent', 'Electron'),
+      tools,
+      discoveryBudgetMs: 30,
+    })
+    const error = await provider.protectorKeyFor([KEY_ID]).catch((caught: unknown) => caught)
+    expect(reasonCodeOf(error)).toBe('electron-discovery-incomplete')
+  })
+
+  it('does not treat an unusable helper payload as a path failure', async () => {
+    // The app was found and ran; "go look for the app" is not the fix, so the
+    // code must not be one of the electron-binary-* ones.
+    const app = await fakeApp('WorkBuddy.app')
+    const provider = new WorkBuddyAtRestKeyProvider({
+      discovery: 'macos-workbuddy',
+      defaultElectronPath: join(root, 'absent', 'Electron'),
+      tools: fakeTools({ findApps: async () => [app.bundlePath] }),
+      spawnHelper: async () => 'not a payload',
+    })
+    const error = await provider.protectorKeyFor([KEY_ID]).catch((caught: unknown) => caught)
+    expect(reasonCodeOf(error)).toBe('encrypted-credential-unreadable')
+  })
+
+  it('classifies a key-id mismatch as a decryption failure, not a path failure', async () => {
+    const app = await fakeApp('WorkBuddy.app')
+    const provider = new WorkBuddyAtRestKeyProvider({
+      discovery: 'macos-workbuddy',
+      defaultElectronPath: join(root, 'absent', 'Electron'),
+      tools: fakeTools({ findApps: async () => [app.bundlePath] }),
+      spawnHelper: async () => PAYLOAD_TEXT,
+    })
+    // An envelope sealed by a different install names a key we cannot derive.
+    const error = await provider.protectorKeyFor(['ffffffffffffffff']).catch((caught: unknown) => caught)
+    expect(reasonCodeOf(error)).toBe('encrypted-credential-unreadable')
   })
 })
 

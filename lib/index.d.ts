@@ -95,6 +95,12 @@ interface WorkBuddyAtRestKeyProviderOptions {
   defaultElectronPath?: string | undefined;
   /** Discovery subprocesses; injectable so tests never spawn. */
   tools?: WorkBuddyDiscoveryTools;
+  /**
+   * Total budget for one discovery run, covering the search and every
+   * candidate check. Injectable so tests can exercise exhaustion without
+   * waiting out the production 10s.
+   */
+  discoveryBudgetMs?: number;
 }
 /**
  * In-memory protector-key resolver: one spawn per key id, single-flight, never
@@ -111,6 +117,7 @@ interface WorkBuddyAtRestKeyProviderOptions {
   private readonly defaultPath;
   private readonly discovery;
   private readonly tools;
+  private readonly discoveryBudgetMs;
   private readonly timeoutMs;
   private readonly source;
   private readonly spawnHelper;

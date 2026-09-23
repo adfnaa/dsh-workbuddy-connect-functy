@@ -25,7 +25,7 @@
  */
 
 import { execFile } from 'node:child_process'
-import { accessSync, constants, realpathSync } from 'node:fs'
+import { accessSync, constants, existsSync, realpathSync } from 'node:fs'
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import type { WorkBuddySignedOutReasonCode } from './status-paths.ts'
@@ -399,6 +399,12 @@ export interface WorkBuddyAtRestKeyProviderOptions {
   defaultElectronPath?: string | undefined
   /** Discovery subprocesses; injectable so tests never spawn. */
   tools?: WorkBuddyDiscoveryTools
+  /**
+   * Total budget for one discovery run, covering the search and every
+   * candidate check. Injectable so tests can exercise exhaustion without
+   * waiting out the production 10s.
+   */
+  discoveryBudgetMs?: number
 }
 
 /**
@@ -492,6 +498,7 @@ export function workBuddyDiscoveryTools(): WorkBuddyDiscoveryTools {
   private readonly defaultPath: string | undefined
   private readonly discovery: WorkBuddyElectronDiscovery
   private readonly tools: WorkBuddyDiscoveryTools
+  private readonly discoveryBudgetMs: number
   private readonly timeoutMs: number
   private readonly source: WorkBuddyKeyPayloadSource
   private readonly spawnHelper: (electronPath: string) => Promise<string>
@@ -516,6 +523,7 @@ export function workBuddyDiscoveryTools(): WorkBuddyDiscoveryTools {
       ? defaultWorkBuddyElectronPath()
       : options.defaultElectronPath ?? undefined
     this.tools = options.tools ?? workBuddyDiscoveryTools()
+    this.discoveryBudgetMs = options.discoveryBudgetMs ?? WORKBUDDY_DISCOVERY_BUDGET_MS
     this.timeoutMs = options.timeoutMs ?? 10_000
     this.spawnHelper = options.spawnHelper ?? (path => this.spawnAt(path))
     this.source = options.source ?? (() => this.spawnPayload())
@@ -544,7 +552,12 @@ export function workBuddyDiscoveryTools(): WorkBuddyDiscoveryTools {
    * reach will open them.
    */
   async protectorKeyFor(requested: readonly string[]): Promise<Buffer> {
-    if (requested.length === 0) throw new Error('encrypted desktop credential carries no key ids')
+    if (requested.length === 0) {
+      throw new WorkBuddyElectronPathError(
+        'encrypted-credential-unreadable',
+        'encrypted desktop credential carries no key ids',
+      )
+    }
     const cached = this.cache
     if (cached !== undefined && requested.includes(cached.keyId)) return cached.key
     this.inflight ??= this.source().then(text => this.ingest(text))
@@ -553,7 +566,8 @@ export function workBuddyDiscoveryTools(): WorkBuddyDiscoveryTools {
       })
     const resolved = await this.inflight
     if (!requested.includes(resolved.keyId)) {
-      throw new Error(
+      throw new WorkBuddyElectronPathError(
+        'encrypted-credential-unreadable',
         `WorkBuddy's current at-rest key (id ${resolved.keyId}) does not match the credential's envelope (id ${requested.join(' or ')});`
         + ' the desktop credential was sealed by a different WorkBuddy installation',
       )
@@ -564,7 +578,10 @@ export function workBuddyDiscoveryTools(): WorkBuddyDiscoveryTools {
   private ingest(text: string): ResolvedKey {
     const payload = parseAtRestPayload(text)
     if (payload === undefined) {
-      throw new Error('WorkBuddy key helper returned an unusable at-rest payload (expected {version:1, atRestSecretKey})')
+      throw new WorkBuddyElectronPathError(
+        'encrypted-credential-unreadable',
+        'WorkBuddy key helper returned an unusable at-rest payload (expected {version:1, atRestSecretKey})',
+      )
     }
     const key = deriveProtectorKey(payload.atRestSecretKey)
     const resolved: ResolvedKey = {
@@ -633,7 +650,7 @@ export function workBuddyDiscoveryTools(): WorkBuddyDiscoveryTools {
       )
     }
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), WORKBUDDY_DISCOVERY_BUDGET_MS)
+    const timer = setTimeout(() => controller.abort(), this.discoveryBudgetMs)
     try {
       let candidates: readonly string[]
       try {
@@ -648,6 +665,12 @@ export function workBuddyDiscoveryTools(): WorkBuddyDiscoveryTools {
       const seen = new Map<string, DiscoveredApp>()
       let unresolved = false
       for (const candidate of candidates) {
+        // A Spotlight index keeps rows for apps deleted since the last sweep,
+        // and a stale row is a *decidable* exclusion: the candidate is gone,
+        // which is not the same as "we could not check it". Skipping it here
+        // is what stops one dead row from sinking a live app beside it — the
+        // plan's "明确不可用 → 排除该候选" case (issue #48 §3.7).
+        if (!existsSync(candidate)) continue
         let bundleIdentifier: string | undefined
         try {
           bundleIdentifier = await this.tools.bundleIdentifier(candidate, controller.signal)

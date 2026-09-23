@@ -192,6 +192,43 @@ describe('#48 card assist block', () => {
     // The prompt itself is still on screen to select by hand.
     expect(rendered).toContain('WorkBuddy')
   })
+
+  it('drops the block and shows the account once the recheck succeeds', async () => {
+    // Every fetch answers with the current body, so flipping `statusBody`
+    // before the click models the host recovering while the card is open.
+    statusBody = { status: 'signed-out', reason: 'gone', reasonCode: 'electron-binary-not-found' }
+    await mount(CN_CARD_VARIANT)
+    statusBody = { status: 'signed-in', nickname: 'Recovered', source: 'desktop' }
+    await act(async () => { findButton(en.assistantRecheck).props.onClick() })
+    await act(async () => {})
+    const after = JSON.stringify(view!.toJSON())
+    expect(after).not.toContain(en.assistantHeading)
+    expect(after).toContain('Recovered')
+  })
+
+  it('keeps the block and its prompt when the recheck still fails', async () => {
+    // A click is not a fix: still-broken must keep showing the way out.
+    statusBody = { status: 'signed-out', reason: 'still gone', reasonCode: 'electron-binary-not-found' }
+    await mount(CN_CARD_VARIANT)
+    await act(async () => { findButton(en.assistantRecheck).props.onClick() })
+    await act(async () => {})
+    const after = JSON.stringify(view!.toJSON())
+    expect(after).toContain(en.assistantHeading)
+    expect(after).toContain(en.assistantCopy)
+    expect(after).toContain('still gone')
+  })
+
+  it('keeps the prompt and shows a read failure when the host is unreachable', async () => {
+    statusBody = { status: 'signed-out', reason: 'gone', reasonCode: 'electron-binary-not-found' }
+    await mount(CN_CARD_VARIANT)
+    request.mockImplementation(async () => { throw new Error('offline') })
+    await act(async () => { findButton(en.assistantRecheck).props.onClick() })
+    await act(async () => {})
+    const after = JSON.stringify(view!.toJSON())
+    // A transient network error must not cost the user the only way out.
+    expect(after).toContain(en.assistantHeading)
+    expect(after).toContain(en.assistantCopy)
+  })
 })
 
 describe('#48 reasonCode reaches the card as a closed enum', () => {
