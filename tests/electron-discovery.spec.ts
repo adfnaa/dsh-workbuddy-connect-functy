@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -306,6 +306,41 @@ describe('#48 an unfinished check is not an absent app', () => {
     })
     expect(await provider.protectorKeyFor([KEY_ID])).toBeInstanceOf(Buffer)
     expect(provider.helperPath()).toBe(good.electronPath)
+  })
+
+  it('never treats an uninspectable candidate as absent, even beside a usable app', async () => {
+    // A candidate the process may not stat is *not* a deleted one. Reading
+    // only ENOENT as "gone" is what keeps a live app from being chosen over a
+    // candidate we merely could not inspect: `existsSync` answers `false` for
+    // EACCES/EPERM too and would silently drop it, which is the bug this pins
+    // (issue #48 review).
+    //
+    // The EACCES is real rather than mocked: mode 000 on the parent directory
+    // blocks traversal into it, so stat on the bundle below fails even for its
+    // owner. That keeps the test honest about the syscall's actual behaviour.
+    const good = await fakeApp('WorkBuddy.app')
+    const deniedParent = join(root, 'NoAccess')
+    const unreadable = join(deniedParent, 'WorkBuddy.app')
+    await mkdir(unreadable, { recursive: true })
+    await chmod(deniedParent, 0o000)
+    try {
+      const provider = new WorkBuddyAtRestKeyProvider({
+        discovery: 'macos-workbuddy',
+        defaultElectronPath: join(root, 'absent', 'Electron'),
+        tools: fakeTools({
+          findApps: async () => [good.bundlePath, unreadable],
+          bundleIdentifier: async () => WORKBUDDY_CN_BUNDLE_ID,
+        }),
+        spawnHelper: async () => PAYLOAD_TEXT,
+      })
+      const error = await provider.protectorKeyFor([KEY_ID]).catch((caught: unknown) => caught)
+      // The usable app must NOT be selected: the other candidate might be a
+      // second copy, so this is an unfinished check.
+      expect(reasonCodeOf(error)).toBe('electron-discovery-incomplete')
+    } finally {
+      // Restore the mode so cleanup can remove the tree.
+      await chmod(deniedParent, 0o755)
+    }
   })
 
   it('gives up on the whole search once the discovery budget is spent', async () => {

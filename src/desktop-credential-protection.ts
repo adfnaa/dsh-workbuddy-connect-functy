@@ -25,7 +25,7 @@
  */
 
 import { execFile } from 'node:child_process'
-import { accessSync, constants, existsSync, realpathSync } from 'node:fs'
+import { accessSync, constants, realpathSync, statSync } from 'node:fs'
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import type { WorkBuddySignedOutReasonCode } from './status-paths.ts'
@@ -670,7 +670,20 @@ export function workBuddyDiscoveryTools(): WorkBuddyDiscoveryTools {
         // which is not the same as "we could not check it". Skipping it here
         // is what stops one dead row from sinking a live app beside it — the
         // plan's "明确不可用 → 排除该候选" case (issue #48 §3.7).
-        if (!existsSync(candidate)) continue
+        //
+        // Only ENOENT qualifies. `existsSync` is not usable here: it answers
+        // `false` for *any* error, so an EACCES/EPERM parent (or an
+        // ENAMETOOLONG path) would be read as "this app was deleted" and a
+        // live sibling would be chosen over a candidate we merely could not
+        // inspect. `statSync` distinguishes them, and anything other than a
+        // confirmed absence stays unresolved.
+        try {
+          statSync(candidate)
+        } catch (error: unknown) {
+          if (isENOENT(error)) continue
+          unresolved = true
+          continue
+        }
         let bundleIdentifier: string | undefined
         try {
           bundleIdentifier = await this.tools.bundleIdentifier(candidate, controller.signal)
@@ -799,6 +812,11 @@ export class WorkBuddyElectronPathError extends Error {
 /** Read the reason code off an arbitrary thrown value, when it carries one. */
 export function reasonCodeOf(error: unknown): WorkBuddySignedOutReasonCode | undefined {
   return error instanceof WorkBuddyElectronPathError ? error.reasonCode : undefined
+}
+
+/** Whether a filesystem error reports an absent path (`existsSync` cannot tell). */
+function isENOENT(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT'
 }
 
 function discoveryIncomplete(detail: string): WorkBuddyElectronPathError {
