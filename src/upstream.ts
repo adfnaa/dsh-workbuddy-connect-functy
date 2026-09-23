@@ -1244,13 +1244,43 @@ export function prepareInternationalChatBody(source: string): string {
     return prepared
   }
   if (!isObject(body)) return prepared
+  // Region-scoped strip, deliberately *after* the shared `prepareChatBody`:
+  // the CN variant keeps its existing request behaviour — `reasoning_effort`
+  // is passed through verbatim there, including the adapter's own `off`
+  // spelling. See `dropUnsupportedEffort` below for why only this region drops it.
+  dropUnsupportedEffort(body)
   const messages = body['messages']
-  if (!Array.isArray(messages)) return prepared
+  if (!Array.isArray(messages)) return JSON.stringify(body)
   const first = messages[0]
-  if (isObject(first) && first['role'] === 'system') return prepared
+  if (isObject(first) && first['role'] === 'system') return JSON.stringify(body)
   // Unshift, so every caller-supplied message keeps its position and content.
   messages.unshift({ role: 'system', content: INTERNATIONAL_SYSTEM_PROMPT })
   return JSON.stringify(body)
+}
+
+/**
+ * Remove the adapter's own `off` effort spelling from the **international** wire.
+ *
+ * `thinkingLevelMap.off` is pinned to the literal `'off'` for models that
+ * declare `canDisableThinking`, so that the level stays selectable. pi-ai
+ * sends that value for any request carrying no explicit level, and the
+ * international endpoint rejects it on the GPT family with HTTP 400 `11133` /
+ * `extError.param === 'reasoning.effort'` (issue #49). Omission is the only
+ * form measured good on every such model; a literal `'none'` is *not* a safe
+ * substitute — accepted by the GPT-5.6 family and GLM, rejected by
+ * `gpt-6-astra`.
+ *
+ * Consequences, stated honestly: the international picker still offers Off,
+ * but selecting it now means "the field is omitted" — the model's actual
+ * behaviour is decided upstream and is *not* guaranteed to disable thinking
+ * or to match the catalog's `defaultEffort`. Declared spellings
+ * (`low`/`medium`/`high`/`xhigh`/`max`) and an explicit `none` pass through
+ * untouched. The CN variant is deliberately unaffected: its endpoint has
+ * accepted this spelling in every measurement so far, and keeping its wire
+ * unchanged is a scope decision, not a claim about that endpoint's future.
+ */
+function dropUnsupportedEffort(obj: Record<string, unknown>): void {
+  if (obj['reasoning_effort'] === 'off') delete obj['reasoning_effort']
 }
 
 /**

@@ -618,3 +618,42 @@ describe('WorkBuddyUpstreamClient.fetchModels badge merge', () => {
     expect(withoutBadges[0]?.billing).toEqual({ credits: 'x0.00 credits', free: true })
   })
 })
+
+describe('chatStream wire effort by region (issue #49)', () => {
+  /**
+   * THE REGION-SPLIT ACCEPTANCE: judged on the request that actually leaves
+   * `chatStream`, not on any intermediate helper. The CN variant must keep its
+   * existing wire (the adapter's own `off` spelling included); the
+   * international variant must drop exactly that spelling and nothing else.
+   */
+  const AI_CREDENTIAL: WorkBuddyCredential = { ...CREDENTIAL, domain: 'www.workbuddy.ai' }
+
+  /** Capture the body chatStream sends for one credential + effort value. */
+  async function wireEffort(credential: WorkBuddyCredential, effort: string | undefined): Promise<unknown> {
+    const calls: { body?: unknown }[] = []
+    vi.stubGlobal('fetch', vi.fn(async (_url: unknown, init?: RequestInit) => {
+      calls.push({ body: init?.body === undefined ? undefined : JSON.parse(String(init.body)) })
+      return fakeResponse('')
+    }))
+    const body: Record<string, unknown> = {
+      model: 'probe-model',
+      messages: [{ role: 'system', content: 'You are a helpful assistant.' }, { role: 'user', content: 'hi' }],
+    }
+    if (effort !== undefined) body['reasoning_effort'] = effort
+    const result = await new WorkBuddyUpstreamClient().chatStream(credential, JSON.stringify(body))
+    expect(result.ok).toBe(true)
+    return calls[0]?.body === undefined ? undefined : (calls[0].body as Record<string, unknown>)['reasoning_effort']
+  }
+
+  it('CN keeps the `off` spelling; international drops it', async () => {
+    expect(await wireEffort(CREDENTIAL, 'off')).toBe('off')
+    expect(await wireEffort(AI_CREDENTIAL, 'off')).toBeUndefined()
+  })
+
+  it('declared spellings and `none` are untouched in both regions', async () => {
+    for (const effort of ['low', 'medium', 'high', 'xhigh', 'max', 'none']) {
+      expect(await wireEffort(CREDENTIAL, effort)).toBe(effort)
+      expect(await wireEffort(AI_CREDENTIAL, effort)).toBe(effort)
+    }
+  })
+})
