@@ -16,10 +16,19 @@
  * successful sweep means "the upstream accepted these spellings", not "these
  * spellings change how the model thinks".
  *
+ * One asymmetry runs through all three steps: an **HTTP answer** is the
+ * upstream talking and is never retried, while a **transport failure** means
+ * the request never arrived and is retried before the step gives up. A path
+ * through a local proxy or a VPN tunnel fails that way in momentary bursts
+ * (DNS, connect, TLS), and reporting such a burst as an undetected model is
+ * both wrong and expensive to disbelieve: the user sees a permanent
+ * "detection incomplete" they have to re-run by hand.
+ *
  * @module dsh-workbuddy-connect/probe
  */
 
 import { randomBytes } from 'node:crypto'
+import { describeFetchFailure } from './fetch-failure.ts'
 import type { WorkBuddyEffort } from './upstream.ts'
 
 /**
@@ -39,6 +48,25 @@ export const PROBE_MAX_TOKENS = 1
 
 /** Per-request ceiling so one hung probe cannot stall the queue. */
 export const PROBE_REQUEST_TIMEOUT_MS = 30_000
+
+/**
+ * Extra attempts one step gets after a transport failure.
+ *
+ * The request reached nothing, so the extra attempts spend no credit and
+ * change no conclusion — they only give a momentary network fault the chance
+ * to pass before the sweep calls the model undetected.
+ */
+export const PROBE_TRANSPORT_RETRIES = 2
+
+/** Wait before each retry, in ms; the last entry repeats. */
+export const PROBE_TRANSPORT_BACKOFF_MS: readonly number[] = [400, 1_200]
+
+/** Real delay used between retries; injectable so tests never sleep. */
+function sleepFor(ms: number): Promise<void> {
+  return new Promise(resolve => {
+    setTimeout(resolve, ms)
+  })
+}
 
 /** Sentinel generator; injectable so tests get deterministic values. */
 export type SentinelFactory = () => string
@@ -61,6 +89,14 @@ export interface ProbeAttempt {
   errorCode?: string
   /** Free-form detail for logs; never shown as a capability claim. */
   detail?: string
+  /**
+   * How many requests this step took, when it took more than one.
+   *
+   * Carried on the attempt rather than folded into {@link detail} so a reader
+   * can tell "the upstream refused this" from "the network dropped it three
+   * times" without parsing prose.
+   */
+  attempts?: number
 }
 
 /** How one attempt is performed; the caller owns credentials and HTTP. */
@@ -117,8 +153,9 @@ function isAcceptance(attempt: ProbeAttempt): boolean {
 /** Why an attempt ended in `unknown`, phrased for a log line. */
 function unknownReason(stage: string, attempt: ProbeAttempt): string {
   const code = attempt.errorCode === undefined ? '' : ` (${attempt.errorCode})`
+  const tries = attempt.attempts === undefined || attempt.attempts < 2 ? '' : ` (${attempt.attempts} attempts)`
   const detail = attempt.detail === undefined ? '' : `: ${attempt.detail}`
-  return `${stage} status ${attempt.status}${code}${detail}`
+  return `${stage} status ${attempt.status}${code}${tries}${detail}`
 }
 
 /**
@@ -135,23 +172,49 @@ export async function probeModel(options: {
   candidates?: readonly WorkBuddyEffort[]
   timeoutMs?: number
   region?: ProbeRegion
+  /** Extra attempts per step after a transport failure; 0 disables retrying. */
+  transportRetries?: number
+  /** Backoff schedule; the last entry repeats. */
+  backoffMs?: readonly number[]
+  /** Injected delay between retries; defaults to a real timer. */
+  sleep?: (ms: number) => Promise<void>
 }): Promise<ProbeOutcome> {
   const sentinel = options.sentinel ?? randomSentinel
   const candidates = options.candidates ?? PROBE_EFFORT_CANDIDATES
   const timeoutMs = options.timeoutMs ?? PROBE_REQUEST_TIMEOUT_MS
   const region = options.region ?? 'cn'
+  const transportRetries = options.transportRetries ?? PROBE_TRANSPORT_RETRIES
+  const backoffMs = options.backoffMs ?? PROBE_TRANSPORT_BACKOFF_MS
+  const sleep = options.sleep ?? sleepFor
   let requests = 0
 
+  /**
+   * One step, retried while — and only while — the failure was transport-level.
+   *
+   * Two things end the retrying: an attempt that produced an HTTP status at all
+   * (however unwelcome, it is an answer about this request), and this attempt's
+   * own deadline having fired (a request that ran out of time will run out of
+   * time again; retrying it would just triple a 30-second stall).
+   */
   const attempt = async (effort: string | undefined): Promise<ProbeAttempt> => {
-    requests += 1
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), timeoutMs)
-    try {
-      return await options.send(effort, controller.signal)
-    } catch (error: unknown) {
-      return { status: 0, streamed: false, detail: `transport error: ${String(error)}` }
-    } finally {
-      clearTimeout(timer)
+    for (let attemptIndex = 0; ; attemptIndex += 1) {
+      requests += 1
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), timeoutMs)
+      let result: ProbeAttempt
+      try {
+        result = await options.send(effort, controller.signal)
+      } catch (error: unknown) {
+        result = { status: 0, streamed: false, detail: `transport error: ${describeFetchFailure(error)}` }
+      } finally {
+        clearTimeout(timer)
+      }
+      const attempts = attemptIndex + 1
+      if (result.status !== 0 || controller.signal.aborted || attemptIndex >= transportRetries) {
+        return attempts === 1 ? result : { ...result, attempts }
+      }
+      const wait = backoffMs[Math.min(attemptIndex, backoffMs.length - 1)] ?? 0
+      if (wait > 0) await sleep(wait)
     }
   }
 

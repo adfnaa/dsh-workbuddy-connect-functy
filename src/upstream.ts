@@ -7,6 +7,7 @@
  * @module dsh-workbuddy-connect/upstream
  */
 
+import { describeFetchFailure } from './fetch-failure.ts'
 import { isJsonObject, parseJsonObject } from './json-value.ts'
 import { appUserAgent, resolveAppVersion, type AppVersionInfo } from './app-version.ts'
 import { chatUserAgent, fallbackChatIdentity, resolveChatIdentity, type ChatIdentity } from './client-identity.ts'
@@ -716,7 +717,10 @@ export class WorkBuddyUpstreamClient {
         ...signal === undefined ? {} : { signal },
       })
     } catch (error: unknown) {
-      return { ok: false, status: 0, kind: 'server', message: `transport error: ${String(error)}` }
+      // The cause chain is the whole diagnosis here: fetch reports every
+      // network-level failure as the same TypeError, and the reason — a
+      // refused proxy, a failed lookup, a reset — lives only in the cause.
+      return { ok: false, status: 0, kind: 'server', message: `transport error: ${describeFetchFailure(error)}` }
     }
     if (response.ok) return { ok: true, response }
     const retryAfter = response.headers.get('retry-after') ?? undefined
@@ -749,7 +753,7 @@ export class WorkBuddyUpstreamClient {
         signal: AbortSignal.timeout(JSON_TIMEOUT_MS),
       })
     } catch (error: unknown) {
-      throw refreshFailure('server', `token refresh transport error: ${String(error)}`)
+      throw refreshFailure('server', `token refresh transport error: ${describeFetchFailure(error)}`)
     }
     let envelope: Envelope
     try {
@@ -1140,7 +1144,7 @@ export class WorkBuddyUpstreamClient {
         signal,
       })
     } catch (error: unknown) {
-      return { status: 0, streamed: false, detail: `transport error: ${String(error)}` }
+      return { status: 0, streamed: false, detail: `transport error: ${describeFetchFailure(error)}` }
     }
 
     if (!response.ok) {

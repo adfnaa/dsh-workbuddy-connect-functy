@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   PROBE_EFFORT_CANDIDATES,
+  PROBE_TRANSPORT_RETRIES,
   probeModel,
   randomSentinel,
   type ProbeAttempt,
@@ -169,12 +170,15 @@ describe('probeModel', () => {
 
   it('still degrades a sibling code from the same envelope to unknown', async () => {
     // `integer_below_min_value` arrives in the same 11133 envelope but names
-    // the `max_tokens` floor, so it says nothing about the effort value.
+    // the `max_tokens` floor, so it says nothing about the effort value. Run on
+    // the global region explicitly: that is where the envelope was measured and
+    // where the widened code set could otherwise mistake a sibling for an
+    // effort rejection.
     const table = new Map<string | undefined, ProbeAttempt>([
       [undefined, ACCEPTED],
       [SENTINEL, { status: 400, streamed: false, errorCode: 'integer_below_min_value' }],
     ])
-    const outcome = await probeModel({ send: tableSender(table), sentinel: () => SENTINEL })
+    const outcome = await probeModel({ send: tableSender(table), sentinel: () => SENTINEL, region: 'global' })
     expect(outcome.validation).toBe('unknown')
   })
 
@@ -205,13 +209,153 @@ describe('probeModel', () => {
   })
 
   it('survives a throwing sender by reporting unknown', async () => {
+    let count = 0
     const outcome = await probeModel({
-      send: async () => { throw new Error('socket hang up') },
+      send: async () => {
+        count += 1
+        throw new Error('socket hang up')
+      },
       sentinel: () => SENTINEL,
+      // A thrown sender is a transport failure, so the retry budget applies.
+      sleep: async () => {},
     })
     expect(outcome.validation).toBe('unknown')
+    expect(count).toBe(1 + PROBE_TRANSPORT_RETRIES)
   })
 })
+
+describe('transport failures', () => {
+  /**
+   * A sender that drops the attempts whose 1-based index is in `drops`.
+   *
+   * Transport drops are the one failure a probe must not read as evidence:
+   * nothing about `reasoning_effort` was answered, because nothing arrived.
+   */
+  function dropping(drops: ReadonlySet<number>, inner: ProbeSender): { send: ProbeSender, count: () => number } {
+    let count = 0
+    return {
+      count: () => count,
+      send: async (effort, signal) => {
+        count += 1
+        if (drops.has(count)) return { status: 0, streamed: false, detail: 'transport error: TypeError: fetch failed' }
+        return inner(effort, signal)
+      },
+    }
+  }
+
+  /** Every attempt drops. */
+  const allDropped = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+  /** Retrying must never spend real time in a test. */
+  const noSleep = async (): Promise<void> => {}
+
+  it('retries a dropped baseline instead of calling the model undetected', async () => {
+    // The measured shape of the 2026-10-04 report: the sweep died on
+    // `baseline status 0: transport error: TypeError: fetch failed` twice in
+    // half a minute, and the identical request answered 200 moments later.
+    const table = new Map<string | undefined, ProbeAttempt>([
+      [undefined, ACCEPTED],
+      [SENTINEL, REJECTED],
+      ['low', ACCEPTED],
+    ])
+    const sender = dropping(new Set([1, 2]), tableSender(table))
+    const outcome = await probeModel({
+      send: sender.send,
+      sentinel: () => SENTINEL,
+      sleep: noSleep,
+      candidates: ['low'],
+    })
+    expect(outcome).toEqual({ validation: 'validating', efforts: ['low'], requests: 5 })
+    // Two dropped baseline attempts, then baseline, sentinel and one level.
+    expect(sender.count()).toBe(5)
+  })
+
+  it('retries a dropped level mid-sweep and still reports the full set', async () => {
+    const table = new Map<string | undefined, ProbeAttempt>([
+      [undefined, ACCEPTED],
+      [SENTINEL, REJECTED],
+      ['low', ACCEPTED],
+      ['medium', ACCEPTED],
+    ])
+    const sender = dropping(new Set([4]), tableSender(table))
+    const outcome = await probeModel({
+      send: sender.send,
+      sentinel: () => SENTINEL,
+      sleep: noSleep,
+      candidates: ['low', 'medium'],
+    })
+    expect(outcome.validation).toBe('validating')
+    expect(outcome.efforts).toEqual(['low', 'medium'])
+    expect(sender.count()).toBe(5)
+  })
+
+  it('gives up after the configured retries and names the cause', async () => {
+    const sender = dropping(allDropped, tableSender(new Map()))
+    const outcome = await probeModel({ send: sender.send, sentinel: () => SENTINEL, sleep: noSleep })
+    expect(outcome.validation).toBe('unknown')
+    expect(outcome.efforts).toEqual([])
+    expect(outcome.requests).toBe(1 + PROBE_TRANSPORT_RETRIES)
+    if (outcome.validation !== 'unknown') throw new Error('unreachable')
+    // The line the settings page shows must say how often it tried and why the
+    // request never arrived; a bare "fetch failed" is what made the report
+    // undiagnosable.
+    expect(outcome.reason).toContain('baseline status 0')
+    expect(outcome.reason).toContain(`(${1 + PROBE_TRANSPORT_RETRIES} attempts)`)
+    expect(outcome.reason).toContain('transport error: TypeError: fetch failed')
+  })
+
+  it('honours a retry budget of zero', async () => {
+    const sender = dropping(allDropped, tableSender(new Map()))
+    const outcome = await probeModel({
+      send: sender.send,
+      sentinel: () => SENTINEL,
+      sleep: noSleep,
+      transportRetries: 0,
+    })
+    expect(outcome.validation).toBe('unknown')
+    expect(outcome.requests).toBe(1)
+    expect(sender.count()).toBe(1)
+  })
+
+  it('never retries an HTTP answer', async () => {
+    // A 401 is the upstream talking about this request: repeating it would only
+    // repeat a conclusive answer.
+    const table = new Map<string | undefined, ProbeAttempt>([
+      [undefined, { status: 401, streamed: false, errorCode: 'unauthorized' }],
+    ])
+    // Nothing is dropped: the first attempt gets the upstream's own answer.
+    const sender = dropping(new Set<number>(), tableSender(table))
+    const outcome = await probeModel({ send: sender.send, sentinel: () => SENTINEL, sleep: noSleep })
+    expect(outcome.validation).toBe('unknown')
+    expect(sender.count()).toBe(1)
+  })
+
+  it('does not retry a step whose own deadline already expired', async () => {
+    // A request that just spent its whole budget will spend it again, so the
+    // retry would only triple the stall before reporting the same unknown. The
+    // sender here answers only once its signal fires, which is what the
+    // deadline does to a genuinely hung request.
+    let count = 0
+    const outcome = await probeModel({
+      sentinel: () => SENTINEL,
+      sleep: noSleep,
+      timeoutMs: 5,
+      send: async (effort, signal) => {
+        count += 1
+        await new Promise<void>(resolve => {
+          if (signal.aborted) {
+            resolve()
+            return
+          }
+          signal.addEventListener('abort', () => { resolve() }, { once: true })
+        })
+        return { status: 0, streamed: false, detail: 'transport error: AbortError: This operation was aborted' }
+      },
+    })
+    expect(outcome.validation).toBe('unknown')
+    expect(count).toBe(1)
+  })
+})
+
 
 describe('randomSentinel', () => {
   it('is not a canonical effort spelling and varies per call', () => {
