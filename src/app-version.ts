@@ -8,9 +8,10 @@
  * UA is therefore built from the form measured against the live gateway, not
  * from the earlier prose that recommended the space form.
  *
- * The version is only ever a UA component: a missing App, an unreadable
- * plist, or a bad cached value degrades to the last saved value and finally to
- * a compiled-in constant, and never blocks credential use or the provider.
+ * The version feeds two request fields and nothing else: the UAs above, and
+ * the chat identity's `X-IDE-Version`. A missing App, an unreadable plist, or
+ * a bad cached value degrades to the last saved value and finally to a
+ * compiled-in constant, and never blocks credential use or the provider.
  *
  * @module dsh-workbuddy-connect/app-version
  */

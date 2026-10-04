@@ -53,6 +53,10 @@ describe('chatStream identity', () => {
     expect(url).toBe('https://copilot.tencent.com/v2/chat/completions')
     const headers = init.headers as Record<string, string>
     expect(headers['User-Agent']).toBe('WorkBuddy/5.5.6 WorkBuddy/5.5.6 CLI/2.137.1')
+    expect(headers['X-IDE-Type']).toBe('WorkBuddy')
+    expect(headers['X-IDE-Name']).toBe('WorkBuddy')
+    expect(headers['X-IDE-Version']).toBe(IDENTITY.clientVersion)
+    expect(headers['X-Product']).toBe('SaaS')
     // The shared family stays exactly as before the identity change.
     expect(headers['X-Requested-With']).toBe('XMLHttpRequest')
     expect(headers['Origin']).toBe('https://www.codebuddy.cn')
@@ -72,6 +76,11 @@ describe('chatStream identity', () => {
     expect(url).toBe('https://www.workbuddy.ai/v2/chat/completions')
     const headers = init.headers as Record<string, string>
     expect(headers['User-Agent']).toBe('WorkBuddy/5.5.6 WorkBuddy AI/5.5.6 CLI/2.137.1')
+    // The attribution family names the product family, not the region; only the
+    // UA's product token (and the system message) differ between the two.
+    expect(headers['X-IDE-Type']).toBe('WorkBuddy')
+    expect(headers['X-IDE-Name']).toBe('WorkBuddy')
+    expect(headers['X-IDE-Version']).toBe(IDENTITY.clientVersion)
     const body = JSON.parse(init.body as string) as { messages: { role: string }[] }
     expect(body.messages[0]?.role).toBe('system')
     expect(body.messages[1]?.role).toBe('user')
@@ -85,6 +94,7 @@ describe('probeEffort identity', () => {
     const [, init] = wire.last()
     const headers = init.headers as Record<string, string>
     expect(headers['User-Agent']).toBe('WorkBuddy/5.5.6 WorkBuddy/5.5.6 CLI/2.137.1')
+    expect(headers['X-IDE-Version']).toBe(IDENTITY.clientVersion)
     const body = JSON.parse(init.body as string) as {
       messages: { role: string }[]; max_tokens: number; reasoning_effort: string
     }
@@ -99,6 +109,7 @@ describe('probeEffort identity', () => {
     const [, init] = wire.last()
     const headers = init.headers as Record<string, string>
     expect(headers['User-Agent']).toBe('WorkBuddy/5.5.6 WorkBuddy AI/5.5.6 CLI/2.137.1')
+    expect(headers['X-IDE-Version']).toBe(IDENTITY.clientVersion)
     const body = JSON.parse(init.body as string) as { messages: { role: string }[]; max_tokens: number }
     expect(body.messages[0]?.role).toBe('system')
     expect(body.max_tokens).toBe(16)
@@ -114,14 +125,20 @@ describe('probeEffort identity', () => {
     const chatWire = captureFetch('{}')
     const chat = await throwing.chatStream(CN, JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'hi' }] }))
     expect(chat.ok).toBe(true)
-    expect((chatWire.last()[1].headers as Record<string, string>)['User-Agent'])
-      .toBe('WorkBuddy/5.5.6 WorkBuddy/5.5.6')
+    const chatHeaders = chatWire.last()[1].headers as Record<string, string>
+    expect(chatHeaders['User-Agent']).toBe('WorkBuddy/5.5.6 WorkBuddy/5.5.6')
+    // The fallback identity carries a version too, so the attribution header
+    // names the same client the UA does instead of going missing.
+    expect(chatHeaders['X-IDE-Type']).toBe('WorkBuddy')
+    expect(chatHeaders['X-IDE-Name']).toBe('WorkBuddy')
+    expect(chatHeaders['X-IDE-Version']).toBe('5.5.6')
 
     const probeWire = captureFetch('{"code":11150,"msg":"no"}', false, 400)
     const probe = await throwing.probeEffort(GLOBAL, 'model-x', 'low', new AbortController().signal)
     expect(probe.status).toBe(400)
-    expect((probeWire.last()[1].headers as Record<string, string>)['User-Agent'])
-      .toBe('WorkBuddy/5.5.2 WorkBuddy AI/5.5.2')
+    const probeHeaders = probeWire.last()[1].headers as Record<string, string>
+    expect(probeHeaders['User-Agent']).toBe('WorkBuddy/5.5.2 WorkBuddy AI/5.5.2')
+    expect(probeHeaders['X-IDE-Version']).toBe('5.5.2')
   })
 })
 
@@ -133,6 +150,9 @@ describe('unchanged paths (regression pin)', () => {
     expect(url).toBe('https://copilot.tencent.com/v2/plugin/auth/token/refresh')
     const headers = init.headers as Record<string, string>
     expect(headers['User-Agent']).toBe('CLI/2.63.2 CodeBuddy/2.63.2')
+    // The attribution family is chat-only: refresh never claims to be the app.
+    expect(headers['X-IDE-Type']).toBeUndefined()
+    expect(headers['X-IDE-Version']).toBeUndefined()
     expect(headers['X-Auth-Refresh-Source']).toBe('workbuddy')
     expect(headers['X-Refresh-Token']).toBe('rt')
     expect(headers['Origin']).toBe('https://www.codebuddy.cn')
@@ -173,5 +193,15 @@ describe('unchanged paths (regression pin)', () => {
     const [url, init] = wire.last()
     expect(url).toBe('https://www.codebuddy.cn/v2/billing/meter/get-user-resource')
     expect((init.headers as Record<string, string>)['User-Agent']).toBeUndefined()
+    expect((init.headers as Record<string, string>)['X-IDE-Version']).toBeUndefined()
+  })
+
+  it('catalog keeps the attribution family out as well', async () => {
+    const wire = captureFetch(JSON.stringify({
+      code: 0, msg: 'ok',
+      data: { models: [{ id: 'm', name: 'M', maxInputTokens: 100, maxOutputTokens: 10 }], agents: [{ name: 'cli', models: ['m'] }] },
+    }))
+    await client().fetchModels(CN)
+    expect((wire.last()[1].headers as Record<string, string>)['X-IDE-Type']).toBeUndefined()
   })
 })

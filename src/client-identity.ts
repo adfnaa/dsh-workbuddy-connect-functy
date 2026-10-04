@@ -10,6 +10,10 @@
  * `CLI/…` token instead of inventing one (the official client's own rule for
  * a missing extension).
  *
+ * The same resolved version also fills the `X-IDE-Version` attribution
+ * header chat and probe send, so the UA and the attribution family can never
+ * name two different clients.
+ *
  * Scope: chat and probe requests ONLY. Refresh, catalog, and billing keep
  * the headers they have always sent; the plan holds the blast radius to this
  * one variable so the live verification matrix stays readable.
@@ -53,7 +57,7 @@ export const CN_APP_VERSION_FILENAME = '.workbuddy-app-version.json'
 
 /** The resolved identity a chat request presents as. */
 export interface ChatIdentity {
-  /** Desktop App version; drives both `WorkBuddy/<v>` product tokens. */
+  /** Desktop App version; drives the desktop UA and `X-IDE-Version`. */
   clientVersion: string
   /** Bundled agent-CLI version; absent drops the `CLI/…` UA token. */
   cliVersion?: string

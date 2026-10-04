@@ -475,14 +475,17 @@ function commonHeaders(credential: WorkBuddyCredential): Record<string, string> 
 /**
  * Chat request headers, including the X-No-* conventions the official CLI uses.
  *
- * `userAgent` carries the desktop identity for chat and probe requests; when
- * it is absent the shared CLI-form UA applies. Refresh shares `commonHeaders`
- * but never this override, so the two paths cannot drift into each other.
+ * `userAgent` and `clientVersion` are the two halves of one resolved desktop
+ * identity and always arrive together: the UA names the client, and the
+ * `X-IDE-*` attribution family declares the app the request claims to be —
+ * the form the official desktop client sends, which is why chat may present
+ * it. Refresh shares `commonHeaders` but never this family, so the two paths
+ * cannot drift into each other.
  */
-function chatHeaders(credential: WorkBuddyCredential, userAgent?: string): Record<string, string> {
+function chatHeaders(credential: WorkBuddyCredential, userAgent: string, clientVersion: string): Record<string, string> {
   const headers: Record<string, string> = {
     ...commonHeaders(credential),
-    ...userAgent === undefined ? {} : { 'User-Agent': userAgent },
+    'User-Agent': userAgent,
     'Content-Type': 'application/json',
     // 安全红线：chat 请求绝不携带 refresh token。
     ...credential.uid === '' ? { 'X-No-User-Id': '1' } : { 'X-User-Id': credential.uid },
@@ -490,6 +493,13 @@ function chatHeaders(credential: WorkBuddyCredential, userAgent?: string): Recor
       ? { 'X-No-Enterprise-Id': '1' }
       : { 'X-Enterprise-Id': credential.enterpriseId },
     ...credential.domain === '' ? { 'X-No-Department-Info': '1' } : { 'X-Domain': credential.domain },
+    // IDE attribution, ported from the desktop app's own requests. Type and
+    // name stay literal because they name the product family rather than this
+    // build (the two regions differ only in the UA's product token); the
+    // version is the same resolved App version that UA carries.
+    'X-IDE-Type': 'WorkBuddy',
+    'X-IDE-Name': 'WorkBuddy',
+    'X-IDE-Version': clientVersion,
     'X-Product': 'SaaS',
   }
   return headers
@@ -700,19 +710,24 @@ export class WorkBuddyUpstreamClient {
   ): Promise<WorkBuddyChatResult> {
     const region = regionOf(credential.domain)
     // Identity resolution must never block a message: any failure — a thrown
-    // resolver included — degrades to the desktop fallback form (built-in
-    // version, no CLI segment), never to the legacy CLI UA.
+    // resolver, or a resolved version the UA validator rejects — degrades to
+    // the desktop fallback form (built-in version, no CLI segment), never to
+    // the legacy CLI UA. The identity itself is kept beside the UA string
+    // because the attribution headers carry its version too.
+    let identity: ChatIdentity
     let userAgent: string
     try {
-      userAgent = chatUserAgent(await this.resolveChatIdentity(region), region)
+      identity = await this.resolveChatIdentity(region)
+      userAgent = chatUserAgent(identity, region)
     } catch {
-      userAgent = chatUserAgent(fallbackChatIdentity(region), region)
+      identity = fallbackChatIdentity(region)
+      userAgent = chatUserAgent(identity, region)
     }
     let response: Response
     try {
       response = await fetch(`${chatBase(credential)}/v2/chat/completions`, {
         method: 'POST',
-        headers: { ...chatHeaders(credential, userAgent), 'Authorization': `Bearer ${credential.accessToken}` },
+        headers: { ...chatHeaders(credential, userAgent, identity.clientVersion), 'Authorization': `Bearer ${credential.accessToken}` },
         body: region === 'global' ? prepareInternationalChatBody(bodyJson) : bodyJson,
         ...signal === undefined ? {} : { signal },
       })
@@ -1118,11 +1133,14 @@ export class WorkBuddyUpstreamClient {
     // Same identity rule as the chat path — chat and its probe sibling must
     // never present two different clients, and a thrown resolver degrades to
     // the desktop fallback form exactly as in `chatStream`.
+    let identity: ChatIdentity
     let userAgent: string
     try {
-      userAgent = chatUserAgent(await this.resolveChatIdentity(international ? 'global' : 'cn'), international ? 'global' : 'cn')
+      identity = await this.resolveChatIdentity(international ? 'global' : 'cn')
+      userAgent = chatUserAgent(identity, international ? 'global' : 'cn')
     } catch {
-      userAgent = chatUserAgent(fallbackChatIdentity(international ? 'global' : 'cn'), international ? 'global' : 'cn')
+      identity = fallbackChatIdentity(international ? 'global' : 'cn')
+      userAgent = chatUserAgent(identity, international ? 'global' : 'cn')
     }
     const payload: Record<string, unknown> = {
       model,
@@ -1139,7 +1157,7 @@ export class WorkBuddyUpstreamClient {
     try {
       response = await fetch(`${chatBase(credential)}/v2/chat/completions`, {
         method: 'POST',
-        headers: { ...chatHeaders(credential, userAgent), 'Authorization': `Bearer ${credential.accessToken}` },
+        headers: { ...chatHeaders(credential, userAgent, identity.clientVersion), 'Authorization': `Bearer ${credential.accessToken}` },
         body: JSON.stringify(payload),
         signal,
       })
