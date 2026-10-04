@@ -95,7 +95,7 @@ declare const FALLBACK_CN_APP_VERSION = "5.5.6";
 declare const CN_APP_VERSION_FILENAME = ".workbuddy-app-version.json";
 /** The resolved identity a chat request presents as. */
 interface ChatIdentity {
-  /** Desktop App version; drives both `WorkBuddy/<v>` product tokens. */
+  /** Desktop App version; drives the desktop UA and `X-IDE-Version`. */
   clientVersion: string;
   /** Bundled agent-CLI version; absent drops the `CLI/…` UA token. */
   cliVersion?: string;
@@ -185,6 +185,14 @@ interface ProbeAttempt {
   errorCode?: string;
   /** Free-form detail for logs; never shown as a capability claim. */
   detail?: string;
+  /**
+   * How many requests this step took, when it took more than one.
+   *
+   * Carried on the attempt rather than folded into {@link detail} so a reader
+   * can tell "the upstream refused this" from "the network dropped it three
+   * times" without parsing prose.
+   */
+  attempts?: number;
 }
 /** How one attempt is performed; the caller owns credentials and HTTP. */
 type ProbeSender = (effort: string | undefined, signal: AbortSignal) => Promise<ProbeAttempt>;
@@ -219,6 +227,12 @@ declare function probeModel(options: {
   candidates?: readonly WorkBuddyEffort[];
   timeoutMs?: number;
   region?: ProbeRegion;
+  /** Extra attempts per step after a transport failure; 0 disables retrying. */
+  transportRetries?: number;
+  /** Backoff schedule; the last entry repeats. */
+  backoffMs?: readonly number[];
+  /** Injected delay between retries; defaults to a real timer. */
+  sleep?: (ms: number) => Promise<void>;
 }): Promise<ProbeOutcome>;
 //#endregion
 //#region src/upstream.d.ts
