@@ -30,6 +30,7 @@ import { isWorkBuddyWebStatus } from './status-document.ts'
 
 /** Props carrying the copy function every browser component receives. */
 export interface WorkBuddyTranslateHolder { t: WorkBuddyTranslate }
+import { WORKBUDDY_PROBE_CONTROL_VISIBLE_DEFAULT } from '../status-paths.ts'
 import type { WorkBuddyWebProbeModel, WorkBuddyWebStatus } from '../status-paths.ts'
 
 /** Injected props; `directory` resolves the session's current model selection. */
@@ -321,7 +322,18 @@ function ModelProbe({ model, card, label, t }: {
   const eligible = probe?.candidates.includes(model) === true
   // Once a model has been detected it leaves the candidate list, so keep the
   // entry visible for it: that is the case the tooltip reports a result in.
-  const visible = eligible || result !== undefined
+  const hasResult = eligible || result !== undefined
+  // The user's switch, read off the same document this control already polls.
+  // An absent field is an older host and keeps the control (see the preference
+  // table) — taking a surface away on an upgrade is not a missing key's job.
+  //
+  // The `'status' in status` guard is what narrows the union: the error arm
+  // carries no preferences at all, so reading the field off it is a type error —
+  // and, in fact, a state in which there is nothing to draw anyway.
+  const wanted = status === undefined || !('probeControlVisible' in status)
+    ? WORKBUDDY_PROBE_CONTROL_VISIBLE_DEFAULT
+    : status.probeControlVisible !== false
+  const visible = hasResult && wanted
 
   // A recorded result answers the question a remembered failure was about, so
   // the flag is dropped with it rather than lingering into the next render.

@@ -517,6 +517,28 @@ describe('WorkBuddy settings page', () => {
     expect(text()).toContain('缓存账号')
   })
 
+  it('offers the detection-control switch beside the badge switch', async () => {
+    // The composer's two annotations are two switches: hiding the badge must not
+    // take the detection control with it.
+    byRoute[CN_CARD_VARIANT.statusPath] = {
+      ...signedIn([account()]),
+      composerCreditVisible: false,
+      probeControlVisible: true,
+    } as unknown as WorkBuddyWebStatus
+    byRoute[AI_CARD_VARIANT.statusPath] = signedIn([])
+    await mount()
+    const badge = document.querySelector('#wbp-composer-visible') as HTMLInputElement | null
+    const probe = document.querySelector('#wbp-probe-control-visible') as HTMLInputElement | null
+    expect(badge?.checked).toBe(false)
+    expect(probe?.checked).toBe(true)
+    expect(text()).toContain(t('probeControlVisibleLabel'))
+
+    await act(async () => { probe?.click(); await Promise.resolve(); await Promise.resolve() })
+    const call = posted().find(entry => entry.body['action'] === 'set-probe-control-visible')
+    expect(call?.url).toBe(CN_CARD_VARIANT.probePath)
+    expect(call?.body['enabled']).toBe(false)
+  })
+
   it('refreshes every product\'s accounts from one button', async () => {
     await mount()
     const refresh = buttons().find(button => button.label === t('accountRefreshAll'))

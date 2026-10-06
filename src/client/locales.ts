@@ -183,6 +183,8 @@ export const en = {
   sidebarVisibleHint: 'Shows both products\' balances at the bottom of the sidebar. Off: no card is drawn there, and the dashboard is opened from the sidebar alone.',
   composerVisibleLabel: 'Composer credit badge',
   composerVisibleHint: 'Shows the selected product\'s balance at the right of the composer row, beside the context readout. Click it to list every account\'s credit.',
+  probeControlVisibleLabel: 'Composer detection control',
+  probeControlVisibleHint: 'Shows the reasoning-level detection control beside the model selector. Off: detection stays available from this page\'s model list.',
   // Accounts: one action over the whole list.
   accountRefreshAll: 'Refresh accounts',
   accountRefreshAllHint: 'Re-reads every signed-in account\'s balance and state, across both products.',
@@ -413,6 +415,8 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   sidebarVisibleHint: '在侧栏底部显示两版的余额。关掉后侧栏不再画这张卡片，仪表盘只从侧栏卡片进入。',
   composerVisibleLabel: '输入框额度徽标',
   composerVisibleHint: '在输入框那一行最右侧（上下文占用右边）显示当前模型所属产品的余额，点击可展开各账号额度。',
+  probeControlVisibleLabel: '输入框检测按钮',
+  probeControlVisibleHint: '在模型选择器旁显示思考强度检测按钮。关掉后仍可在本页模型列表里检测。',
   accountRefreshAll: '刷新账号',
   accountRefreshAllHint: '重新读取两版所有已登录账号的余额与状态。',
   accountCredits: '积分 {total}',

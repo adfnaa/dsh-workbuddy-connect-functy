@@ -2036,6 +2036,17 @@ export function WorkBuddySettingsPage({ t, context, refreshPanel }: WorkBuddySet
   }, [writeSidebarPreference])
 
   /**
+   * Show or hide the composer's reasoning-detection control.
+   *
+   * The third composer switch: the badge reports a balance, this control offers
+   * to spend credit detecting a model, and the two are separate surfaces a user
+   * may want independently.
+   */
+  const setProbeControlVisible = useCallback((visible: boolean): void => {
+    writeSidebarPreference({ action: 'set-probe-control-visible', enabled: visible })
+  }, [writeSidebarPreference])
+
+  /**
    * Write every staged model filter.
    *
    * All-or-nothing in what it REPORTS rather than in what it sends: each
@@ -2152,6 +2163,10 @@ export function WorkBuddySettingsPage({ t, context, refreshPanel }: WorkBuddySet
   const currentComposerCreditVisible: boolean | undefined =
     statedPreference(statuses, status => status.composerCreditVisible)
 
+  /** Whether the host says the composer keeps its detection control. */
+  const currentProbeControlVisible: boolean | undefined =
+    statedPreference(statuses, status => status.probeControlVisible)
+
   return (
     // The reference layout: a 720px column of groups of hairline-separated rows.
     // No card surfaces — the page has to read as one of the harness's own
@@ -2199,21 +2214,34 @@ export function WorkBuddySettingsPage({ t, context, refreshPanel }: WorkBuddySet
         <p className="wbp-notice" role="status">{notice}</p>
       )}
       {/*
-        * How the sidebar is drawn, and whether it is drawn at all.
+        * Every plugin-wide display surface, in one group: the sidebar card and
+        * how it states the credit, the composer's credit badge, and the
+        * composer's detection control.
         *
-        * One plugin-wide choice, shown by both products' cards, so it lives in a
-        * group of its own rather than under either product's model list — and it
-        * writes IMMEDIATELY, because the surface it redraws is on screen while
-        * the control is being used: staging it would let the sidebar state the
-        * credit one way while this row claims the other.
+        * One group because they are one kind of thing — a surface this plugin
+        * draws, which the user may want or not — and each is independent of the
+        * others: hiding the badge must not hide the detection control, and
+        * turning the sidebar card off says nothing about the composer. Which is
+        * why the group is gated on ANY of them being stated rather than on the
+        * sidebar's own pair: with three independent preferences, a gate that
+        * only looked at two would hide the third's switch behind a host that
+        * happened to omit the others.
         *
-        * Two rows, in dependency order: whether the card exists, then how it
-        * states the credit. The style row is hidden while the card is off
-        * because it would describe a surface that is not there — and it is
-        * hidden on `false` only, never on `undefined`: a host that cannot state
-        * the preference is not a host that turned the card off.
+        * They write IMMEDIATELY, because every one of these surfaces is on
+        * screen while its control is being used: staging it would let the
+        * sidebar or the composer state one thing while the row claims another.
+        *
+        * The style row is hidden while the card is off — it would describe a
+        * surface that is not there — and on `false` only, never on
+        * `undefined`: a host that cannot state the preference is not a host that
+        * turned the card off.
         */}
-      {currentCreditVisible === undefined && currentCreditStyle === undefined ? null : (
+      {currentCreditVisible === undefined
+        && currentCreditStyle === undefined
+        && currentComposerCreditVisible === undefined
+        && currentProbeControlVisible === undefined
+        ? null
+        : (
         <SettingsGroup title={t('sidebarStyleHeading')}>
           {currentCreditVisible === undefined ? null : (
             <SettingRow
@@ -2273,6 +2301,22 @@ export function WorkBuddySettingsPage({ t, context, refreshPanel }: WorkBuddySet
                   checked={currentComposerCreditVisible}
                   disabled={busy}
                   onChange={setComposerCreditVisible}
+                />
+              }
+            />
+          )}
+          {currentProbeControlVisible === undefined ? null : (
+            <SettingRow
+              title={t('probeControlVisibleLabel')}
+              titleFor="wbp-probe-control-visible"
+              description={t('probeControlVisibleHint')}
+              control={
+                <ToggleField
+                  id="wbp-probe-control-visible"
+                  label={t('probeControlVisibleLabel')}
+                  checked={currentProbeControlVisible}
+                  disabled={busy}
+                  onChange={setProbeControlVisible}
                 />
               }
             />

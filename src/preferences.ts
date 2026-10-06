@@ -111,6 +111,24 @@ export const WORKBUDDY_PREFERENCES = {
     // document, and "keep it as it was" has to mean the badge is still there.
     stated: (value: boolean): boolean => value !== false,
   },
+  /**
+   * Whether the composer keeps its reasoning-detection control.
+   *
+   * The third composer switch, and the same kind of surface as the badge above:
+   * a small annotation the user may or may not want beside the model selector.
+   * Kept separate from it because the two do unrelated jobs — one reports a
+   * balance, the other offers to spend credit detecting a model — and a user who
+   * wants neither, or only one, must not have to take both.
+   *
+   * Plugin-wide like the others: the control serves whichever WorkBuddy model the
+   * session has selected, and there is one composer.
+   */
+  probeControlVisible: {
+    field: z.boolean().default(true)
+      .description('Show the reasoning-detection control beside the model selector in the composer (off: detection stays available from the settings page)'),
+    // "Absent means present", for the same reason as the two above.
+    stated: (value: boolean): boolean => value !== false,
+  },
 } as const
 
 /** Every preference's config-field name. */

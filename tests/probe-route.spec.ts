@@ -301,6 +301,34 @@ describe('probe control route', () => {
     expect(result).toMatchObject({ status: 404, body: { error: 'composer-visible-setting-not-supported' } })
   })
 
+  /**
+   * The detection control's switch: the third composer surface, with its own
+   * seam. Kept distinct from the badge's for the same reason the badge's is kept
+   * distinct from the sidebar card's — one handler serving several actions would
+   * let a payload land in the wrong field behind a 200.
+   */
+  it('stores whether the composer keeps its detection control', async () => {
+    const written: boolean[] = []
+    const { origin, key } = await mount({
+      setProbeControlVisible: async visible => {
+        written.push(visible)
+        return { state: 'updated' }
+      },
+    })
+    const headers = { 'X-WorkBuddy-Probe-Key': key }
+    expect((await post(origin, { action: 'set-probe-control-visible', enabled: false }, headers)).status).toBe(200)
+    expect((await post(origin, { action: 'set-probe-control-visible', enabled: true }, headers)).status).toBe(200)
+    expect((await post(origin, { action: 'set-probe-control-visible', enabled: 'false' }, headers)).status).toBe(400)
+    expect((await post(origin, { action: 'set-probe-control-visible' }, headers)).status).toBe(400)
+    expect(written).toEqual([false, true])
+  })
+
+  it('reports the detection control as unsupported when the host cannot store it', async () => {
+    const { origin, key } = await mount()
+    const result = await post(origin, { action: 'set-probe-control-visible', enabled: false }, { 'X-WorkBuddy-Probe-Key': key })
+    expect(result).toMatchObject({ status: 404, body: { error: 'probe-control-setting-not-supported' } })
+  })
+
   it('writes the model allowlist, deduped and account-guarded', async () => {
     let written: readonly string[] | undefined
     let guarded: string | undefined

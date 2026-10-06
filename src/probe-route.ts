@@ -85,6 +85,14 @@ export interface WorkBuddyProbeRouteOptions {
    */
   setComposerCreditVisible?: (visible: boolean) => Promise<{ state: string; reason?: string }>
   /**
+   * Show or hide the composer's reasoning-detection control.
+   *
+   * Its own seam because it removes a different control: the badge reports a
+   * balance, this one spends credit on detection. Both are small composer
+   * annotations, so they share a settings group rather than a switch.
+   */
+  setProbeControlVisible?: (visible: boolean) => Promise<{ state: string; reason?: string }>
+  /**
    * Open one absolute http(s) link in the user's own browser.
    *
    * The sign-in routes hand the user a page on the provider's site, and only
@@ -205,7 +213,7 @@ function parseAction(text: string): WorkBuddyProbeAction | undefined {
     if (!isWorkBuddySidebarCreditStyle(style)) return undefined
     return { action: 'set-sidebar-credit-style', creditStyle: style }
   }
-  if (action === 'set-sidebar-credit-visible' || action === 'set-composer-credit-visible') {
+  if (action === 'set-sidebar-credit-visible' || action === 'set-composer-credit-visible' || action === 'set-probe-control-visible') {
     const enabled = wrapped['enabled']
     // A strict boolean rather than a truthiness test: the string "false" is
     // truthy, so coerced input would keep the surface on a request that plainly
@@ -322,6 +330,14 @@ export function workBuddyProbeHandler(
           return
         }
         json(res, 200, await deps.setComposerCreditVisible(action.enabled === true))
+        return
+      }
+      if (action.action === 'set-probe-control-visible') {
+        if (deps.setProbeControlVisible === undefined) {
+          json(res, 404, { error: 'probe-control-setting-not-supported' })
+          return
+        }
+        json(res, 200, await deps.setProbeControlVisible(action.enabled === true))
         return
       }
       if (action.action === 'set-model-visibility') {

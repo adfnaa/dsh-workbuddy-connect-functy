@@ -111,19 +111,21 @@ export interface WorkBuddyProbeAction {
    * `set-maximum-context-window` persists the international card preference;
    * `set-model-visibility` hides or shows one model for the signed-in
    * account's picker; `set-sidebar-credit-style`,
-   * `set-sidebar-credit-visible` and `set-composer-credit-visible` persist how
-   * the sidebar's own card is drawn, whether it is drawn at all, and whether the
-   * composer dock draws its credit badge.
+   * `set-sidebar-credit-visible`, `set-composer-credit-visible` and
+   * `set-probe-control-visible` persist how the sidebar's own card is drawn,
+   * whether it is drawn at all, whether the composer dock draws its credit badge,
+   * and whether the composer keeps its reasoning-detection control.
    *
    * Every one of them is a write, which is why they share this route's
    * in-process key and loopback guards rather than the read-only status GET.
    */
-  action: 'probe' | 'clear' | 'refresh' | 'set-maximum-context-window' | 'set-model-visibility' | 'set-model-allowlist' | 'open-link' | 'set-sidebar-credit-style' | 'set-sidebar-credit-visible' | 'set-composer-credit-visible'
+  action: 'probe' | 'clear' | 'refresh' | 'set-maximum-context-window' | 'set-model-visibility' | 'set-model-allowlist' | 'open-link' | 'set-sidebar-credit-style' | 'set-sidebar-credit-visible' | 'set-composer-credit-visible' | 'set-probe-control-visible'
   /** Target model id; required for `probe` and `set-model-visibility`. */
   model?: string
   /**
    * Requested on/off value for `set-maximum-context-window`,
-   * `set-sidebar-credit-visible` and `set-composer-credit-visible`.
+   * `set-sidebar-credit-visible`, `set-composer-credit-visible` and
+   * `set-probe-control-visible`.
    *
    * Both are switches over an existing surface rather than a value the user
    * types, so the wire carries the desired state itself: a retried request is
@@ -538,6 +540,16 @@ export const WORKBUDDY_SIDEBAR_CREDIT_VISIBLE_DEFAULT = true
  * so both switches answer a missing field identically.
  */
 export const WORKBUDDY_COMPOSER_CREDIT_VISIBLE_DEFAULT = true
+
+/**
+ * Whether the composer draws its reasoning-detection control when no document
+ * states the preference.
+ *
+ * The same "present" default as the two credit surfaces, and read by the control
+ * itself rather than through the panel projection: this one is not part of the
+ * dashboard's view tree.
+ */
+export const WORKBUDDY_PROBE_CONTROL_VISIBLE_DEFAULT = true
 
 /** The JSON document the plugin card renders. */
 export type WorkBuddyWebStatus =

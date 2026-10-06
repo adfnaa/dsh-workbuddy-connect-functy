@@ -958,6 +958,8 @@ export function apply(ctx: Context, config: Config): void {
    * like the two beside it: the badge then keeps its default (present).
    */
   let setComposerCreditVisible: ((visible: boolean) => Promise<{ state: string; reason?: string }>) | undefined
+  /** Writes whether the composer keeps its reasoning-detection control. */
+  let setProbeControlVisible: ((visible: boolean) => Promise<{ state: string; reason?: string }>) | undefined
   /**
    * Whether the host mounted a settings service this plugin can write through.
    * Decided once, inside the `settings` inject. The maximum-context getter
@@ -1186,6 +1188,14 @@ export function apply(ctx: Context, config: Config): void {
           if (result.state === 'updated') ctx.emit('llm/adapters-updated')
           return result
         },
+        // On both variants, like the three above: one composer, and the control
+        // follows whichever product's model the session has selected.
+        setProbeControlVisible: async visible => {
+          if (setProbeControlVisible === undefined) return { state: 'failed', reason: 'settings are unavailable' }
+          const result = await setProbeControlVisible(visible)
+          if (result.state === 'updated') ctx.emit('llm/adapters-updated')
+          return result
+        },
         // The sign-in link is not about this variant: both products' cards share
         // one dialog layout, and the page hands this route whatever link the
         // host minted. Opening it is the host's job because only the host can
@@ -1360,6 +1370,18 @@ export function apply(ctx: Context, config: Config): void {
       }
       try {
         await forms.update(entryId() ?? PROFILE_ENTRY_ID, { composerCreditVisible: visible })
+      } catch (error: unknown) {
+        return { state: 'failed', reason: error instanceof Error ? error.message.slice(0, 300) : String(error) }
+      }
+      return { state: 'updated' }
+    }
+    // The third of the composer switches, written the same way.
+    setProbeControlVisible = async visible => {
+      if (forms.update === undefined) {
+        return { state: 'failed', reason: 'this host does not accept settings writes' }
+      }
+      try {
+        await forms.update(entryId() ?? PROFILE_ENTRY_ID, { probeControlVisible: visible })
       } catch (error: unknown) {
         return { state: 'failed', reason: error instanceof Error ? error.message.slice(0, 300) : String(error) }
       }

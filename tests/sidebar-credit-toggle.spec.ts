@@ -223,6 +223,28 @@ describe('the sidebar credit card switch', () => {
     expect((await get(CN_VARIANT.statusPath))['sidebarCreditVisible']).toBe(true)
   })
 
+  /**
+   * The third composer switch travels the same wire, and stays independent of
+   * the two credit surfaces: a user may hide the badge and keep the detection
+   * control, or the reverse.
+   */
+  it('publishes and stores the detection-control switch, independently', async () => {
+    const { get, post } = await boot()
+    const before = await get(CN_VARIANT.statusPath)
+    expect(before['probeControlVisible']).toBe(true)
+    const key = before['probeKey'] as string
+
+    expect(await post(CN_VARIANT.probePath, { action: 'set-probe-control-visible', enabled: false }, key))
+      .toMatchObject({ status: 200, body: { state: 'updated' } })
+    expect(FakeSettingsService.current?.valueOf(WorkBuddy.PROFILE_ENTRY_ID, 'probeControlVisible')).toBe(false)
+
+    const after = await get(AI_VARIANT.statusPath)
+    expect(after['probeControlVisible']).toBe(false)
+    // The credit surfaces are untouched: three switches, three fields.
+    expect(after['composerCreditVisible']).toBe(true)
+    expect(after['sidebarCreditVisible']).toBe(true)
+  })
+
   it('refuses the write without the in-process key, and leaves the card alone', async () => {
     const { get, post } = await boot()
     const refused = await post(CN_VARIANT.probePath, { action: 'set-sidebar-credit-visible', enabled: false }, 'not-the-key')
