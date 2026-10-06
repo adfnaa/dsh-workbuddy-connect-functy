@@ -124,3 +124,37 @@ export function Menu({ open, onSelect, items, footer, selectedIds, anchor }: Men
 export function Tag({ tone, children }: { tone?: string, children?: ReactNode }): ReactNode {
   return <span data-tone={tone ?? 'outline'}>{children}</span>
 }
+
+/**
+ * The platform tooltip, as a wrapper that renders its label for assertions.
+ *
+ * The real one portals a bubble on hover; the plugin's tests assert on the
+ * accessible text of the trigger, so the label is rendered as a data attribute
+ * and the child stays the only visible content.
+ */
+export function Tooltip({ label, children, disabled }: {
+  label: string
+  children?: ReactNode
+  side?: string
+  delayMs?: number
+  disabled?: boolean
+}): ReactNode {
+  return <span data-tooltip={disabled === true ? undefined : label}>{children}</span>
+}
+
+/**
+ * The platform's anchored-popover placement hook, as a fixed offset.
+ *
+ * Position itself is the platform's business (it measures a real DOM); what the
+ * plugin's tests need is that an OPEN panel is positioned and a closed one is
+ * not measured at all, so this answers a stable style object only while open.
+ */
+export function useAnchoredPosition(options: { open: boolean }): { left: number, top: number } | null {
+  return options.open ? { left: 0, top: 0 } : null
+}
+
+/** The platform's outside-pointer dismissal hook: a no-op under a DOM-free renderer. */
+export function useDismissOnOutsidePointer(): void {
+  // Nothing to subscribe to without a document: the plugin's own Escape handler
+  // and the click on the trigger are what the tests drive.
+}

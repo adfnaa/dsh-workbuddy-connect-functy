@@ -43,6 +43,7 @@ const SLOT_DECLS: Record<string, { kind: 'list' | 'keyed' | 'single', scope: 'ro
   'settings.section': { kind: 'list', scope: 'root' },
   'conversation.session.header.utilities': { kind: 'list', scope: 'root' },
   'conversation.input.right': { kind: 'list', scope: 'root' },
+  'conversation.composer.dock': { kind: 'list', scope: 'root' },
 }
 
 /**
@@ -174,6 +175,38 @@ describe('the conversation-side seats are lists with distinct ids', () => {
     // is why each goes through `ctx.slots.inject` instead.
     const core = new SlotCore()
     expect(() => register(core, { name: 'conversation.input.right', id: 'workbuddy-probe' }))
+      .toThrow(/not declared/)
+  })
+})
+
+describe('the composer dock seat carries the credit badge', () => {
+  it('accepts the badge as an entry, and orders it after whatever is already there', () => {
+    // The dock's own context readout is appended AFTER the slot's entries, so a
+    // registration here always lands to its right — which is what the badge's
+    // seat means. This pins the registry half of that: the entry is accepted and
+    // sorts by order, so the plugin's own numbering is what decides its place.
+    const core = new SlotCore()
+    declareHostSlots(core, ['conversation.composer.dock'])
+    expect(() => register(core, { name: 'conversation.composer.dock', id: 'workbuddy-credit-badge', order: 100 }))
+      .not.toThrow()
+    const entries = cells(core, 'conversation.composer.dock')
+    expect(entries).toHaveLength(1)
+    expect(entries[0].options.id).toBe('workbuddy-credit-badge')
+  })
+
+  it('rejects a duplicate badge id, which is why the client registers one entry', () => {
+    const core = new SlotCore()
+    declareHostSlots(core, ['conversation.composer.dock'])
+    register(core, { name: 'conversation.composer.dock', id: 'workbuddy-credit-badge', order: 100 })
+    // A second registration under the same id is the duplicate-factory failure
+    // this whole seat is guarded against.
+    expect(() => register(core, { name: 'conversation.composer.dock', id: 'workbuddy-credit-badge', order: 100 }))
+      .toThrow(/already has an entry with id "workbuddy-credit-badge"/)
+  })
+
+  it('runs no registration on a host without the dock seat', () => {
+    const core = new SlotCore()
+    expect(() => register(core, { name: 'conversation.composer.dock', id: 'workbuddy-credit-badge' }))
       .toThrow(/not declared/)
   })
 })

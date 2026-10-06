@@ -309,22 +309,17 @@ export function apply(ctx: ClientContext): void {
         // long, which is how a preference that changes how the card is DRAWN
         // would otherwise appear to do nothing.
         //
-        // `openPanel` is the same selection the card's own click performs. It is
-        // here because the card can be switched OFF from this page, and this
-        // plugin has no second route into the dashboard: without it, turning the
-        // card off would hide the only door to the panel it opens. Read at click
-        // time through the same reflective seam as the card (ui-layout is not a
-        // dependency of this bundle).
+        // No dashboard seam is injected any more: the page used to carry a row
+        // that opened it while the sidebar card was off, and that row is gone by
+        // request. The card's own click is what selects the panel now.
         inject: (): {
           t: WorkBuddyTranslate
           context: ClientContext
           refreshPanel: () => void
-          openPanel: () => void
         } => ({
           t,
           context: ctx,
           refreshPanel: () => { void panelStore.refresh() },
-          openPanel: () => { panelFace().open() },
         }),
       }, WorkBuddySettingsPage)) ?? NOOP_DISPOSER
     ))
@@ -359,6 +354,11 @@ export function apply(ctx: ClientContext): void {
   // decides whether there is a quota to state), and it reads the SAME panel
   // store the sidebar card and the dashboard do, so the three surfaces can never
   // disagree about what is left.
+  //
+  // Registered LAST in the row, which is what puts it to the right of the
+  // harness's own context readout: the dock lays its entries out in ascending
+  // order, and ContextMeter is appended after the slot's own entries, so the
+  // highest order here still lands after it.
   guardClientContribution('composer credit badge', () => {
     ctx.inject(['modelDirectories'], scope => {
       guardClientContribution('composer credit badge', () => {
@@ -366,7 +366,9 @@ export function apply(ctx: ClientContext): void {
           guardClientContribution('composer credit badge', () => scope.slots.register({
             name: 'conversation.composer.dock',
             id: 'workbuddy-credit-badge',
-            // Last in the row: the harness's own readout owns the middle.
+            // Highest order in the row (see the comment above the registration):
+            // the context readout is appended after the slot's entries, so this
+            // is what places the badge at the row's right end.
             order: 100,
             inject: sessionId => ({
               directory: scope.modelDirectories.directoryFor(

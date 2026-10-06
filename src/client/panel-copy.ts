@@ -78,6 +78,19 @@ export const PANEL_COPY_EN = {
    * needs a heading above it.
    */
   creditBadgeLabel: '{product}: {remaining}',
+  /**
+   * The expanded badge panel's heading and accessible name.
+   *
+   * A title rather than a bare list because the panel states two pools: without
+   * it the rows would read as one account list whose figures do not add up.
+   */
+  creditBadgePanelTitle: 'Credit by account',
+  /** One account's balance, when a cap is known: "5,266 / 10,000 left". */
+  accountCreditsRow: '{remaining} / {total} left',
+  /** One account's balance, when no cap was stated: "5,266 left". */
+  accountCreditsOnly: '{remaining} left',
+  /** One account whose balance has not been read (yet, or at all). */
+  accountCreditsPending: 'Not read yet',
   /** The footer card's accessible name and tooltip. */
   footerLabel: 'WorkBuddy — open the dashboard',
   /** The rail icon's accessible name. */
@@ -115,6 +128,10 @@ export const PANEL_COPY_ZH: Record<PanelKey, string> = {
   creditRemainingLabel: '{product} 剩余额度',
   /** 聊天框那枚徽标的文字与无障碍名：产品名 + 余额。 */
   creditBadgeLabel: '{product}: {remaining}',
+  creditBadgePanelTitle: '各账号额度',
+  accountCreditsRow: '剩余 {remaining} / {total}',
+  accountCreditsOnly: '剩余 {remaining}',
+  accountCreditsPending: '尚未读取',
   footerLabel: 'WorkBuddy —— 打开仪表盘',
   railLabel: 'WorkBuddy 仪表盘',
 }

@@ -15,7 +15,7 @@
  */
 
 import type { WorkBuddySidebarCreditStyle, WorkBuddyWebAccount, WorkBuddyWebStatus } from '../status-paths.ts'
-import { WORKBUDDY_SIDEBAR_CREDIT_VISIBLE_DEFAULT } from '../status-paths.ts'
+import { WORKBUDDY_COMPOSER_CREDIT_VISIBLE_DEFAULT, WORKBUDDY_SIDEBAR_CREDIT_VISIBLE_DEFAULT } from '../status-paths.ts'
 import { CARD_VARIANTS } from './card-variants.ts'
 import type { WorkBuddyCardVariant } from './card-variants.ts'
 import { statedPreference } from './status-document.ts'
@@ -64,6 +64,15 @@ export interface PanelProductView {
    * the remaining figure alone.
    */
   creditsCapacity?: number
+  /**
+   * The pool's accounts, in pool order.
+   *
+   * Carried on the view rather than reached for from the raw document so the
+   * composer badge's expanded panel reads exactly the list the dashboard and the
+   * settings page read — one projection, three surfaces, no chance of the panel
+   * naming an account the page has already dropped.
+   */
+  accounts: readonly WorkBuddyWebAccount[]
 }
 
 /** The whole dashboard. */
@@ -117,6 +126,15 @@ export interface PanelView {
    * switch hides a surface, it does not stop the plugin reading the pool).
    */
   creditVisible: boolean
+  /**
+   * Whether the composer dock keeps its credit badge — the user's choice,
+   * carried on the status document beside the two above.
+   *
+   * The same "absent means present" reading as {@link creditVisible}, and for the
+   * same reason: a document that cannot state the field is an older host, and
+   * taking a surface away on an upgrade is not something a missing key may do.
+   */
+  composerCreditVisible: boolean
 }
 
 /** Inputs the projection needs beyond the snapshot itself. */
@@ -233,6 +251,7 @@ function productView(
     stats,
     benched,
     catalogSource,
+    accounts,
     ...total === undefined ? {} : { creditsRemaining: total },
     ...capacity === undefined ? {} : { creditsCapacity: capacity },
   }
@@ -265,6 +284,7 @@ export function buildPanelView(options: BuildPanelViewOptions): PanelView {
     footTitle: footTitle(products),
     creditStyle: creditStyleOf(snapshot),
     creditVisible: creditVisibleOf(snapshot),
+    composerCreditVisible: composerCreditVisibleOf(snapshot),
   }
 }
 
@@ -293,6 +313,17 @@ function creditVisibleOf(snapshot: WorkBuddyPanelSnapshot): boolean {
   return statedPreference(snapshot.statuses, status => status.sidebarCreditVisible)
     ?? WORKBUDDY_SIDEBAR_CREDIT_VISIBLE_DEFAULT
 }
+/**
+ * Whether the composer keeps its credit badge, as the host stated it.
+ *
+ * Same shape and same "absent means present" default as {@link creditVisibleOf},
+ * which is what lets both switches be read by one rule instead of two.
+ */
+function composerCreditVisibleOf(snapshot: WorkBuddyPanelSnapshot): boolean {
+  return statedPreference(snapshot.statuses, status => status.composerCreditVisible)
+    ?? WORKBUDDY_COMPOSER_CREDIT_VISIBLE_DEFAULT
+}
+
 /** Read one numeric stat back out of a product block. */
 function countOf(product: PanelProductView, label: PanelKey): number {
   const stat = product.stats.find(candidate => candidate.label === label)

@@ -31,6 +31,21 @@ function signedIn(credits: number | undefined): WorkBuddyWebStatus {
   return { status: 'signed-in', models: [], accounts: { accounts: [account(credits)] } } as unknown as WorkBuddyWebStatus
 }
 
+/** A signed-in document carrying a specific account list. */
+function signedInWithAccounts(accounts: readonly Record<string, unknown>[]): WorkBuddyWebStatus {
+  return {
+    status: 'signed-in',
+    models: [],
+    accounts: {
+      accounts: accounts.map(entry => ({
+        uid: 'u', origin: 'qr', domain: 'copilot.tencent.com', renewable: true,
+        enabled: true, available: true, expiresAtMs: 0, lastUsedAtMs: 0, addedAtMs: 0,
+        ...entry,
+      })),
+    },
+  } as unknown as WorkBuddyWebStatus
+}
+
 describe('the composer credit badge', () => {
   let view: ReactTestRenderer | undefined
   let state: { current: { provider: string, model: string } | null }
@@ -123,4 +138,69 @@ describe('the composer credit badge', () => {
     view = await mount()
     expect(view.toJSON()).toBeNull()
   })
+
+  it('expands into one line per account, grouped by product', async () => {
+    // The panel's whole job: the badge states a pool total, and the pool is not
+    // what a user acts on — an account is. Both products are listed, because the
+    // composer badge belongs to the plugin and either pool may be the one in use.
+    documents[CARD_VARIANTS[0]!.statusPath] = signedInWithAccounts([
+      { id: 'cn:1', name: '账号甲', credits: 5266, creditsTotal: 10000 },
+      { id: 'cn:2', name: '账号乙', credits: 300 },
+    ])
+    documents[CARD_VARIANTS[1]!.statusPath] = signedInWithAccounts([
+      { id: 'ai:1', name: 'AI one', credits: 1200 },
+    ])
+    view = await mount()
+    // Closed: the trigger alone, no per-account text anywhere.
+    expect(JSON.stringify(view.toJSON())).not.toContain('账号甲')
+
+    const trigger = view.root.findByType('button')
+    await act(async () => { trigger.props.onClick() })
+
+    const text = JSON.stringify(view.toJSON())
+    expect(text).toContain('账号甲')
+    expect(text).toContain('账号乙')
+    expect(text).toContain('AI one')
+    // Both product headings, and the figure each account carries.
+    expect(text).toContain('WorkBuddy')
+    expect(text).toContain('WorkBuddy AI')
+    expect(text).toContain('5,266 / 10,000 left')
+    // No capacity reported for the second one: the balance alone, never a zero.
+    expect(text).toContain('300 left')
+    expect(text).toContain('1,200 left')
+  })
+
+  it('states "not read yet" for an account with no balance instead of a zero', async () => {
+    documents[CARD_VARIANTS[0]!.statusPath] = signedInWithAccounts([
+      { id: 'cn:1', name: '账号甲', credits: 5266 },
+      { id: 'cn:2', name: '账号乙' },
+    ])
+    documents[CARD_VARIANTS[1]!.statusPath] = signedInWithAccounts([])
+    view = await mount()
+    await act(async () => { view?.root.findByType('button').props.onClick() })
+    const text = JSON.stringify(view.toJSON())
+    expect(text).toContain('账号乙')
+    expect(text).toContain('Not read yet')
+    // A product with no accounts contributes no heading at all.
+    expect(text).not.toContain('WorkBuddy AI')
+  })
+
+  it('renders nothing at all when the host says the badge is off', async () => {
+    // The switch removes the surface, not its figures: nothing is left in the
+    // row, and the panel cannot be opened because there is no trigger.
+    documents[CARD_VARIANTS[0]!.statusPath] = {
+      ...signedIn(5266),
+      composerCreditVisible: false,
+    } as unknown as WorkBuddyWebStatus
+    view = await mount()
+    expect(view.toJSON()).toBeNull()
+  })
+
+  it('keeps the badge for a host that cannot state the preference', async () => {
+    // An older document has no field at all, and an absent field means "as it
+    // was" — taking the badge away on an upgrade is not a missing key's job.
+    view = await mount()
+    expect(JSON.stringify(view.toJSON())).toContain('5,266')
+  })
+
 })

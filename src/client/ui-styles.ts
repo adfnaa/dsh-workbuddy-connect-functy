@@ -347,14 +347,35 @@ export const PANEL_CSS = `
 .wbp-footBar{display:block;width:100%;background:var(--dsw-alias-bg-layer-2);border-radius:999px;height:5px;overflow:hidden}
 .wbp-footFill{display:block;background:var(--dsw-alias-brand-primary);border-radius:999px;height:100%;transition:width .3s ease}
 /* ------------------------------------------------------- composer badge */
-/* The credit figure in the composer dock, beside the harness's own token /
- * cache-hit readout. margin-left:auto is what puts it at the far right of that
- * row: the dock centres its entries, and an auto margin absorbs the free space
- * on one side only, so the harness's readout keeps its place and this lands on
- * the row's right edge. */
-.wbp-creditBadge{flex:none;align-items:baseline;gap:4px;display:inline-flex;margin-left:auto;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:18px;font-variant-numeric:tabular-nums}
+/* The credit figure in the composer dock, to the RIGHT of the harness's own
+ * context readout.
+ *
+ * Two CSS facts make that placement work, and both are needed:
+ *
+ * - The dock renders the slot's entries FIRST and appends its own context meter
+ *   after them, and the slot outlet uses display:contents, so this element is a
+ *   direct flex item of the dock. DOM order alone would therefore put the badge
+ *   LEFT of the meter; the flex order below is what moves it after.
+ * - The dock centres its items, so being last is not the same as being at the
+ *   edge. margin-left:auto absorbs the free space on the badge's left only, which
+ *   pins it to the row's right end with the meter beside it. */
+.wbp-creditBadgeRoot{flex:none;display:inline-flex;align-items:center;order:1;margin-left:auto;position:relative}
+.wbp-creditBadge{flex:none;align-items:baseline;gap:4px;display:inline-flex;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;line-height:18px;font-variant-numeric:tabular-nums;background:0 0;border:1px solid transparent;border-radius:8px;padding:1px 6px;cursor:pointer}
+.wbp-creditBadge:hover{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}
+.wbp-creditBadge:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
 .wbp-creditBadgeName{color:var(--dsw-alias-label-tertiary)}
 .wbp-creditBadgeValue{color:var(--dsw-alias-label-secondary)}
+/* The expanded panel: the harness's own popover material (menu surface, lv2
+ * shadow, 12px radius), fixed-positioned from the trigger by useAnchoredPosition
+ * so it survives scrolling the transcript. */
+.wbp-badgePanel{position:fixed;z-index:1000;min-width:232px;max-width:320px;padding:10px 12px;border-radius:12px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);display:flex;flex-direction:column;gap:10px}
+.wbp-badgePanelTitle{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;font-weight:600;line-height:16px}
+.wbp-badgeGroup{display:flex;flex-direction:column;gap:4px}
+.wbp-badgeGroupTitle{margin:0;color:var(--dsw-alias-label-secondary);font-size:11px;font-weight:600;line-height:16px}
+.wbp-badgeAccounts{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:2px}
+.wbp-badgeAccount{display:flex;align-items:baseline;gap:12px;font-size:12px;line-height:18px}
+.wbp-badgeAccountName{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary)}
+.wbp-badgeAccountValue{flex:none;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;white-space:nowrap}
 /* -------------------------------------------------------- the rail icon */
 .wbp-railButton{box-sizing:border-box;width:36px;height:36px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:1px solid transparent;border-radius:8px;flex:none;justify-content:center;align-items:center;margin:0 0 4px;padding:0;display:inline-flex}
 .wbp-railButton:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}
