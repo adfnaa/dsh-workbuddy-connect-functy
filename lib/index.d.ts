@@ -1256,6 +1256,25 @@ declare const WORKBUDDY_PREFERENCES: {
     readonly field: z<boolean, boolean, "defined">;
     readonly stated: (value: boolean) => boolean;
   };
+  /**
+   * Whether the composer dock keeps its WorkBuddy credit badge.
+   *
+   * A different surface from the sidebar card above, and a separate switch
+   * because the two answer different questions: the card is a resident summary
+   * of both pools, while the badge is one product's figure sitting in the row
+   * that also states what this turn cost. Someone who keeps the sidebar clean
+   * may still want the figure beside the context meter, and the reverse is just
+   * as ordinary — so neither switch implies the other.
+   *
+   * Plugin-wide for the same reason the other two are: the composer shows one
+   * row, and it renders whichever product the session's current model belongs
+   * to, so a per-product setting would leave the same check box meaning two
+   * different things depending on the model in effect.
+   */
+  readonly composerCreditVisible: {
+    readonly field: z<boolean, boolean, "defined">;
+    readonly stated: (value: boolean) => boolean;
+  };
 };
 /** Every preference's config-field name. */
 type WorkBuddyPreferenceKey = keyof typeof WORKBUDDY_PREFERENCES;
