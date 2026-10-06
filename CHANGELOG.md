@@ -2,6 +2,10 @@
 
 版本号即 git tag，遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.13.10] — 2026-10-06
+
+- **刷新 npm 包的 git 出处**：仓库历史经过一次身份重写 —— 早先在本机全局 git 身份未配置时推入的提交被登记成了另一个名字，现已在全部提交与 tag 上统一为维护者账号 `functy23`。重写只改署名，**文件内容逐字节未变**（main 的 tree 哈希与 27 个 tag 指向的 tree 与重写前完全一致），提交数与代码均无改动；本版据此重新构建并发布，使 npm 包记录到的提交与实际仓库对齐。
+
 ## [0.13.9] — 2026-10-05
 
 - **修复「检测未完成」只报 `TypeError: fetch failed`**：思考强度探测的每一步现在把网络层失败与上游应答分开对待 —— 传输失败（请求根本没到）按 400ms / 1200ms 退避重试两次，HTTP 应答（哪怕是 401/429）仍然只问一次，因为它已经是上游对这个请求的结论；探测自身的 30 秒超时也不重试，否则一次卡死会变成三倍停顿。这样本地代理/VPN 链路上瞬时丢包不会再被记成「模型探测不出来」。
@@ -26,6 +30,7 @@
 - 截图换成 2026-10-01 实拍（对话、模型选择器、设置账号、设置模型），并在仓库根声明 `screenshots.json`。
 - 并入上游：Windows 在 Electron 宿主内发现桌面 App（#66），以及国际端点的 effort 拒绝码按区域识别（#75）。
 
+[0.13.10]: https://github.com/functy23/dsh-workbuddy-connect-functy/releases/tag/v0.13.10
 [0.13.9]: https://github.com/functy23/dsh-workbuddy-connect-functy/releases/tag/v0.13.9
 [0.13.8]: https://github.com/functy23/dsh-workbuddy-connect-functy/releases/tag/v0.13.8
 [0.13.7]: https://github.com/functy23/dsh-workbuddy-connect-functy/releases/tag/v0.13.7
