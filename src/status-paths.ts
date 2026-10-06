@@ -110,19 +110,20 @@ export interface WorkBuddyProbeAction {
    * `refresh` re-reads the credential and re-fetches the model catalog;
    * `set-maximum-context-window` persists the international card preference;
    * `set-model-visibility` hides or shows one model for the signed-in
-   * account's picker; `set-sidebar-credit-style` and
-   * `set-sidebar-credit-visible` persist how the sidebar's own card is drawn,
-   * and whether it is drawn at all.
+   * account's picker; `set-sidebar-credit-style`,
+   * `set-sidebar-credit-visible` and `set-composer-credit-visible` persist how
+   * the sidebar's own card is drawn, whether it is drawn at all, and whether the
+   * composer dock draws its credit badge.
    *
    * Every one of them is a write, which is why they share this route's
    * in-process key and loopback guards rather than the read-only status GET.
    */
-  action: 'probe' | 'clear' | 'refresh' | 'set-maximum-context-window' | 'set-model-visibility' | 'set-model-allowlist' | 'open-link' | 'set-sidebar-credit-style' | 'set-sidebar-credit-visible'
+  action: 'probe' | 'clear' | 'refresh' | 'set-maximum-context-window' | 'set-model-visibility' | 'set-model-allowlist' | 'open-link' | 'set-sidebar-credit-style' | 'set-sidebar-credit-visible' | 'set-composer-credit-visible'
   /** Target model id; required for `probe` and `set-model-visibility`. */
   model?: string
   /**
-   * Requested on/off value for `set-maximum-context-window` and
-   * `set-sidebar-credit-visible`.
+   * Requested on/off value for `set-maximum-context-window`,
+   * `set-sidebar-credit-visible` and `set-composer-credit-visible`.
    *
    * Both are switches over an existing surface rather than a value the user
    * types, so the wire carries the desired state itself: a retried request is
@@ -527,6 +528,16 @@ export type WorkBuddyWebPreferences = WorkBuddyStatedPreferences
  * way would empty the sidebar of anyone whose host merely predates the field.
  */
 export const WORKBUDDY_SIDEBAR_CREDIT_VISIBLE_DEFAULT = true
+
+/**
+ * Whether the composer dock draws its credit badge when no document states the
+ * preference.
+ *
+ * Same "present" default as the sidebar card's, and the browser half reads it
+ * through the panel projection (see `client/panel.ts`) rather than on its own,
+ * so both switches answer a missing field identically.
+ */
+export const WORKBUDDY_COMPOSER_CREDIT_VISIBLE_DEFAULT = true
 
 /** The JSON document the plugin card renders. */
 export type WorkBuddyWebStatus =

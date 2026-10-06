@@ -86,6 +86,8 @@ describe('WorkBuddy settings page', () => {
       if (body === undefined) return { ok: false, status: 500, json: async () => ({}) }
       return { ok: true, json: async () => body }
     })
+    storage = new Map()
+    vi.stubGlobal('localStorage', localStorageDouble)
     vi.stubGlobal('fetch', request)
     vi.stubGlobal('open', vi.fn())
     vi.spyOn(window, 'confirm').mockReturnValue(true)
@@ -94,6 +96,23 @@ describe('WorkBuddy settings page', () => {
       fillRect: () => {},
     } as unknown as CanvasRenderingContext2D)
   })
+
+  /**
+   * A memory `localStorage`, installed per test.
+   *
+   * This environment does not expose one (Node's own stub is present but
+   * unavailable without a flag, and it shadows jsdom's), and the page's cache
+   * reads and writes through exactly this interface. A double rather than a
+   * skip: the cache's behaviour — including that a THROWING storage is survivable
+   * — is what these tests are about.
+   */
+  let storage: Map<string, string>
+  const localStorageDouble = {
+    getItem: (key: string): string | null => storage.get(key) ?? null,
+    setItem: (key: string, value: string): void => { storage.set(key, value) },
+    removeItem: (key: string): void => { storage.delete(key) },
+    clear: (): void => { storage.clear() },
+  }
 
   afterEach(() => {
     act(() => { root?.unmount() })
@@ -107,7 +126,7 @@ describe('WorkBuddy settings page', () => {
   /** How many times the page asked the sidebar card to re-read. */
   let panelRefreshes = 0
 
-  async function mount(options: { openPanel?: () => void } = {}): Promise<void> {
+  async function mount(): Promise<void> {
     panelRefreshes = 0
     container = document.createElement('div')
     document.body.appendChild(container)
@@ -118,8 +137,6 @@ describe('WorkBuddy settings page', () => {
         // The sidebar card polls on its own minute, so a write that changes how
         // it is drawn has to nudge it — asserted here rather than assumed.
         refreshPanel: () => { panelRefreshes += 1 },
-        // The way into the dashboard while the sidebar card is switched off.
-        ...options.openPanel === undefined ? {} : { openPanel: options.openPanel },
       }))
       await Promise.resolve()
       await Promise.resolve()
@@ -369,7 +386,7 @@ describe('WorkBuddy settings page', () => {
    * they are asserted together. Individually they would each pass while the
    * combination stranded the user with no way into the panel the card opens.
    */
-  it('turns the sidebar card off, yields its style row, and keeps the dashboard reachable', async () => {
+  it('turns the sidebar card off, and yields the style row with it', async () => {
     const off = (visible: boolean): WorkBuddyWebStatus => ({
       ...withModels([model('m1')], { account: 'uid-a:ent', disabled: [] }),
       sidebarCreditStyle: 'remaining',
@@ -385,8 +402,7 @@ describe('WorkBuddy settings page', () => {
       if (init?.method === 'POST') return { ok: true, json: async () => ({ state: 'updated' }) }
       return reflected(url, init)
     })
-    let opened = 0
-    await mount({ openPanel: () => { opened += 1 } })
+    await mount()
 
     // On: the switch mirrors the document, and the dashboard row is NOT drawn —
     // the sidebar card is that destination, and this page does not duplicate a
@@ -394,7 +410,11 @@ describe('WorkBuddy settings page', () => {
     const toggle = document.querySelector('#wbp-sidebar-visible') as HTMLInputElement | null
     expect(toggle?.checked).toBe(true)
     expect(text()).toContain(t('sidebarStyleRemaining'))
-    expect(text()).not.toContain(t('sidebarDashboardOpen'))
+    // No dashboard row anywhere on the page: it used to carry one for the case
+    // where the card is off, and the sidebar card is now the only way into the
+    // panel. The English dictionary no longer has the key at all, so this
+    // asserts the fact itself rather than a lookup that would compile either way.
+    expect(text()).not.toContain('Dashboard')
 
     byRoute[CN_CARD_VARIANT.statusPath] = off(false)
     await act(async () => { toggle?.click(); await Promise.resolve(); await Promise.resolve() })
@@ -407,28 +427,112 @@ describe('WorkBuddy settings page', () => {
     // The sidebar outside this page is told to redraw now, not at its next tick.
     expect(panelRefreshes).toBeGreaterThan(0)
 
-    // Off: the style row described a card that is no longer drawn, so it goes;
-    // the way into the dashboard takes its place.
+    // Off: the style row described a card that is no longer drawn, so it goes.
+    // The page deliberately offers NO second door into the dashboard — the
+    // sidebar card is the only one — so nothing takes the style row's place.
     expect(text()).not.toContain(t('sidebarStyleRemaining'))
-    const open = buttons().find(button => button.label === t('sidebarDashboardOpen'))
-    expect(open).toBeDefined()
-    await act(async () => { open?.node.click(); await Promise.resolve() })
-    expect(opened).toBe(1)
   })
 
-  it('offers the switch alone when the page cannot reach the dashboard', async () => {
+  it('offers the switch alone when the page has no layout seam either', async () => {
     byRoute[CN_CARD_VARIANT.statusPath] = {
       ...withModels([model('m1')], { account: 'uid-a:ent', disabled: [] }),
       sidebarCreditVisible: false,
     } as unknown as WorkBuddyWebStatus
     byRoute[AI_CARD_VARIANT.statusPath] = signedIn([])
-    // No `openPanel`: a profile whose client entry has no layout seam. The
-    // switch still works — it is the row that cannot be offered, not the write.
+    // No layout seam needed any more: the switch is the whole surface, and the
+    // dashboard is reached from the sidebar card alone.
     await mount()
     const toggle = document.querySelector('#wbp-sidebar-visible') as HTMLInputElement | null
     expect(toggle?.checked).toBe(false)
-    expect(text()).not.toContain(t('sidebarDashboardOpen'))
   })
+
+  /**
+   * The status cache: what the page paints before the network answers, and what
+   * it must never let a cache entry override.
+   *
+   * These cases drive the real page with a deliberately hanging route, which is
+   * the situation the cache exists for (a slow link on a cold visit).
+   */
+  it('paints the cached documents before the live read answers', async () => {
+    // Seed the cache the way a previous visit would have.
+    localStorage.setItem(
+      'dsh-workbuddy-connect-functy/status/' + CN_CARD_VARIANT.id,
+      JSON.stringify({ ...signedIn([account({ name: '缓存账号', credits: 4242 })]), sidebarCreditStyle: 'remaining' }),
+    )
+    // Every status read hangs: nothing but the cache can paint this page.
+    let release: (() => void) | undefined
+    const gate = new Promise<void>(resolve => { release = resolve })
+    request.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') return { ok: true, json: async () => ({ state: 'ok' }) }
+      await gate
+      const body = byRoute[url]
+      if (body === undefined) return { ok: false, status: 500, json: async () => ({}) }
+      return { ok: true, json: async () => body }
+    })
+    await mount()
+    // The cached account is on screen while the route is still in flight.
+    expect(text()).toContain('缓存账号')
+    release?.()
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+  })
+
+  it('lets the live answer replace the cache, and caches that answer in turn', async () => {
+    localStorage.setItem(
+      'dsh-workbuddy-connect-functy/status/' + CN_CARD_VARIANT.id,
+      JSON.stringify(signedIn([account({ name: '缓存账号', credits: 1 })])),
+    )
+    await mount()
+    expect(text()).toContain('主账号')
+    expect(text()).not.toContain('缓存账号')
+    // The fresh document is what the next visit starts from.
+    const stored = localStorage.getItem('dsh-workbuddy-connect-functy/status/' + CN_CARD_VARIANT.id)
+    expect(stored).toContain('主账号')
+  })
+
+  it('survives a storage that throws, rather than failing the page', async () => {
+    // Private modes and locked-down WebViews do exactly this. The page must
+    // still render and still read live: the cache is an optimisation, never a
+    // dependency.
+    vi.stubGlobal('localStorage', {
+      getItem: () => { throw new Error('storage is disabled') },
+      setItem: () => { throw new Error('storage is disabled') },
+      removeItem: () => { throw new Error('storage is disabled') },
+      clear: () => { throw new Error('storage is disabled') },
+    })
+    await mount()
+    expect(text()).toContain('主账号')
+  })
+
+  it('keeps the cached document when a read fails outright', async () => {
+    localStorage.setItem(
+      'dsh-workbuddy-connect-functy/status/' + CN_CARD_VARIANT.id,
+      JSON.stringify(signedIn([account({ name: '缓存账号', credits: 4242 })])),
+    )
+    // Both routes refuse: the page must not blank what it already knew.
+    request.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') return { ok: true, json: async () => ({ state: 'ok' }) }
+      throw new Error('offline')
+    })
+    await mount()
+    expect(text()).toContain('缓存账号')
+  })
+
+  it('refreshes every product\'s accounts from one button', async () => {
+    await mount()
+    const refresh = buttons().find(button => button.label === t('accountRefreshAll'))
+    expect(refresh).toBeDefined()
+    await act(async () => { refresh?.node.click(); await Promise.resolve(); await Promise.resolve() })
+
+    // One write per product, on each product's own account route: the action
+    // drops that pool's cached credits so the next read re-spends one billing
+    // request per account — which is exactly what the user asked for.
+    const refreshes = posted().filter(entry => entry.body['action'] === 'refresh-credits')
+    expect(refreshes.map(entry => entry.url).sort())
+      .toEqual([CN_CARD_VARIANT.accountPath, AI_CARD_VARIANT.accountPath].sort())
+    // The lists outside this page are told to re-read now, not at their tick.
+    expect(panelRefreshes).toBeGreaterThan(0)
+  })
+
 
   /**
    * The expanded card's usage report — the reference implementation's stat grid,

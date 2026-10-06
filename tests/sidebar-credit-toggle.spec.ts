@@ -200,6 +200,29 @@ describe('the sidebar credit card switch', () => {
     expect((await get(CN_VARIANT.statusPath))['sidebarCreditVisible']).toBe(true)
   })
 
+  /**
+   * The composer badge's switch travels the same wire and the same plugin-wide
+   * rule, over a surface the sidebar knows nothing about.
+   */
+  it('publishes and stores the composer badge switch, beside the sidebar card', async () => {
+    const { get, post } = await boot()
+    const before = await get(CN_VARIANT.statusPath)
+    // A document that never mentions the field still draws the badge: an
+    // upgrade alone must not take a surface away.
+    expect(before['composerCreditVisible']).toBe(true)
+
+    const key = before['probeKey'] as string
+    expect(await post(CN_VARIANT.probePath, { action: 'set-composer-credit-visible', enabled: false }, key))
+      .toMatchObject({ status: 200, body: { state: 'updated' } })
+    expect(FakeSettingsService.current?.valueOf(WorkBuddy.PROFILE_ENTRY_ID, 'composerCreditVisible')).toBe(false)
+
+    // Written through the CN route, read back off the international one: one
+    // composer, so one answer, whichever route carries the write.
+    expect((await get(AI_VARIANT.statusPath))['composerCreditVisible']).toBe(false)
+    // Independent of the sidebar's own switch — the two are different surfaces.
+    expect((await get(CN_VARIANT.statusPath))['sidebarCreditVisible']).toBe(true)
+  })
+
   it('refuses the write without the in-process key, and leaves the card alone', async () => {
     const { get, post } = await boot()
     const refused = await post(CN_VARIANT.probePath, { action: 'set-sidebar-credit-visible', enabled: false }, 'not-the-key')

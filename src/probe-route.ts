@@ -76,6 +76,15 @@ export interface WorkBuddyProbeRouteOptions {
    */
   setSidebarCreditVisible?: (visible: boolean) => Promise<{ state: string; reason?: string }>
   /**
+   * Show or hide the composer dock's credit badge.
+   *
+   * A separate seam from the sidebar card above because it draws a different
+   * surface in a different place; the two switches are independent by design.
+   * Plugin-wide for the same reason: the composer shows one row, whichever
+   * product's model the session currently has selected.
+   */
+  setComposerCreditVisible?: (visible: boolean) => Promise<{ state: string; reason?: string }>
+  /**
    * Open one absolute http(s) link in the user's own browser.
    *
    * The sign-in routes hand the user a page on the provider's site, and only
@@ -196,13 +205,13 @@ function parseAction(text: string): WorkBuddyProbeAction | undefined {
     if (!isWorkBuddySidebarCreditStyle(style)) return undefined
     return { action: 'set-sidebar-credit-style', creditStyle: style }
   }
-  if (action === 'set-sidebar-credit-visible') {
+  if (action === 'set-sidebar-credit-visible' || action === 'set-composer-credit-visible') {
     const enabled = wrapped['enabled']
     // A strict boolean rather than a truthiness test: the string "false" is
-    // truthy, so coerced input would keep the card on a request that plainly
+    // truthy, so coerced input would keep the surface on a request that plainly
     // meant to remove it.
     if (typeof enabled !== 'boolean') return undefined
-    return { action: 'set-sidebar-credit-visible', enabled }
+    return { action, enabled }
   }
   if (action === 'set-model-allowlist') {
     const account = wrapped['account']
@@ -305,6 +314,14 @@ export function workBuddyProbeHandler(
           return
         }
         json(res, 200, await deps.setSidebarCreditVisible(action.enabled === true))
+        return
+      }
+      if (action.action === 'set-composer-credit-visible') {
+        if (deps.setComposerCreditVisible === undefined) {
+          json(res, 404, { error: 'composer-visible-setting-not-supported' })
+          return
+        }
+        json(res, 200, await deps.setComposerCreditVisible(action.enabled === true))
         return
       }
       if (action.action === 'set-model-visibility') {

@@ -953,6 +953,12 @@ export function apply(ctx: Context, config: Config): void {
    */
   let setSidebarCreditVisible: ((visible: boolean) => Promise<{ state: string; reason?: string }>) | undefined
   /**
+   * Writes whether the composer dock keeps its credit badge, through the same
+   * settings service. Undefined on a host with no settings service, exactly
+   * like the two beside it: the badge then keeps its default (present).
+   */
+  let setComposerCreditVisible: ((visible: boolean) => Promise<{ state: string; reason?: string }>) | undefined
+  /**
    * Whether the host mounted a settings service this plugin can write through.
    * Decided once, inside the `settings` inject. The maximum-context getter
    * answers `undefined` while this is false, and a status document without the
@@ -1169,6 +1175,17 @@ export function apply(ctx: Context, config: Config): void {
           if (result.state === 'updated') ctx.emit('llm/adapters-updated')
           return result
         },
+        // On both variants for the same reason as the two above: the composer
+        // shows one badge, and which product's figure it states follows the
+        // session's model, so either route may carry the write.
+        setComposerCreditVisible: async visible => {
+          if (setComposerCreditVisible === undefined) return { state: 'failed', reason: 'settings are unavailable' }
+          const result = await setComposerCreditVisible(visible)
+          // The badge reads the preference out of a status document, so the
+          // write has to reach the next read without waiting for a sweep.
+          if (result.state === 'updated') ctx.emit('llm/adapters-updated')
+          return result
+        },
         // The sign-in link is not about this variant: both products' cards share
         // one dialog layout, and the page hands this route whatever link the
         // host minted. Opening it is the host's job because only the host can
@@ -1330,6 +1347,19 @@ export function apply(ctx: Context, config: Config): void {
       }
       try {
         await forms.update(entryId() ?? PROFILE_ENTRY_ID, { sidebarCreditVisible: visible })
+      } catch (error: unknown) {
+        return { state: 'failed', reason: error instanceof Error ? error.message.slice(0, 300) : String(error) }
+      }
+      return { state: 'updated' }
+    }
+    // Same write again, for the composer badge: a different surface, so a
+    // different field, but the same boolean domain and the same refusal shape.
+    setComposerCreditVisible = async visible => {
+      if (forms.update === undefined) {
+        return { state: 'failed', reason: 'this host does not accept settings writes' }
+      }
+      try {
+        await forms.update(entryId() ?? PROFILE_ENTRY_ID, { composerCreditVisible: visible })
       } catch (error: unknown) {
         return { state: 'failed', reason: error instanceof Error ? error.message.slice(0, 300) : String(error) }
       }

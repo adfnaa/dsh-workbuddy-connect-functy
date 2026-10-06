@@ -269,6 +269,38 @@ describe('probe control route', () => {
     expect(result).toMatchObject({ status: 404, body: { error: 'sidebar-visible-setting-not-supported' } })
   })
 
+  /**
+   * The composer badge's own switch: a second boolean over a second surface,
+   * with its own seam and its own refusal.
+   *
+   * Kept separate from the sidebar's case on purpose — the two write DIFFERENT
+   * config fields, and one route handler serving both would let a payload land
+   * in the wrong field while every status code still read 200.
+   */
+  it('stores whether the composer dock carries its credit badge', async () => {
+    const written: boolean[] = []
+    const { origin, key } = await mount({
+      setComposerCreditVisible: async visible => {
+        written.push(visible)
+        return { state: 'updated' }
+      },
+    })
+    const headers = { 'X-WorkBuddy-Probe-Key': key }
+    expect((await post(origin, { action: 'set-composer-credit-visible', enabled: false }, headers)).status).toBe(200)
+    expect((await post(origin, { action: 'set-composer-credit-visible', enabled: true }, headers)).status).toBe(200)
+    // Same strict boolean as the sidebar's switch: "false" is a request to
+    // remove the badge, not a truthy string that keeps it.
+    expect((await post(origin, { action: 'set-composer-credit-visible', enabled: 'false' }, headers)).status).toBe(400)
+    expect((await post(origin, { action: 'set-composer-credit-visible' }, headers)).status).toBe(400)
+    expect(written).toEqual([false, true])
+  })
+
+  it('reports the composer badge as unsupported when the host cannot store it', async () => {
+    const { origin, key } = await mount()
+    const result = await post(origin, { action: 'set-composer-credit-visible', enabled: false }, { 'X-WorkBuddy-Probe-Key': key })
+    expect(result).toMatchObject({ status: 404, body: { error: 'composer-visible-setting-not-supported' } })
+  })
+
   it('writes the model allowlist, deduped and account-guarded', async () => {
     let written: readonly string[] | undefined
     let guarded: string | undefined

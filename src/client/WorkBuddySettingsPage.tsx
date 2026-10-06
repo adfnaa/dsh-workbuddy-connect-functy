@@ -58,7 +58,7 @@ import type {
 } from '../status-paths.ts'
 import { encodeQrCode } from './qr-code.ts'
 import { CARD_VARIANTS } from './card-variants.ts'
-import { readWorkBuddyStatus, statedPreference } from './status-document.ts'
+import { isWorkBuddyWebStatus, readWorkBuddyStatus, statedPreference } from './status-document.ts'
 import { Menu } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import { openExternalLink } from './open-external.ts'
@@ -87,6 +87,58 @@ type Translate = (key: WorkBuddySettingsKey, params?: Record<string, unknown>) =
 const POLL_INTERVAL_MS = 2_000
 /** How often the page re-reads both products while it is open. */
 const REFRESH_INTERVAL_MS = 60_000
+
+/**
+ * Where the last answered status documents are cached, per product.
+ *
+ * The same mechanism the reference implementation this page follows
+ * (`@mars-sea/dsh-commandcode-provider`) uses for its own cross-session cache:
+ * a namespaced `localStorage` key, read and written through a store that
+ * tolerates a missing or throwing storage (private modes, a WebView without one)
+ * by yielding nothing and dropping the write.
+ *
+ * Why the cache exists at all: this page's first paint is a read of the status
+ * route, and that route answers only after it has looked up every account's
+ * credit against the upstream. On a slow link that is seconds of blank page for
+ * figures the browser already had. Cached documents paint immediately, and the
+ * live read replaces them when it lands — the same stale-while-revalidate shape,
+ * with the screen never showing LESS than it already knew.
+ *
+ * What is deliberately NOT cached: nothing beyond what the status route already
+ * sends to this same origin (no token material — the route never carries any),
+ * and nothing that outlives the account it describes. A cache entry is keyed by
+ * product and replaced wholesale on every successful read; a stale entry is only
+ * ever a starting point, never a value that survives a failed read.
+ */
+const STATUS_CACHE_PREFIX = 'dsh-workbuddy-connect-functy/status'
+
+/** The cache key for one product's document. */
+function statusCacheKey(variantId: string): string {
+  return `${STATUS_CACHE_PREFIX}/${variantId}`
+}
+
+/** Read one cached document, or `undefined` when there is none to trust. */
+function readCachedStatus(variantId: string): WorkBuddyWebStatus | undefined {
+  try {
+    const raw = localStorage.getItem(statusCacheKey(variantId))
+    if (raw === null) return undefined
+    const parsed: unknown = JSON.parse(raw)
+    return isWorkBuddyWebStatus(parsed) ? parsed : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Remember one document for the next visit; a failed write is simply dropped. */
+function writeCachedStatus(variantId: string, status: WorkBuddyWebStatus): void {
+  try {
+    localStorage.setItem(statusCacheKey(variantId), JSON.stringify(status))
+  } catch {
+    // A full or unavailable storage is not a reason to fail the read that
+    // just succeeded: the page has its answer, and the next visit simply
+    // reads it live again.
+  }
+}
 
 /* ---------------------------------------------------------------- pieces */
 
@@ -861,7 +913,7 @@ interface TaggedAccount {
  * The totals stay separate for the same reason; summing them would produce a
  * number that describes nothing.
  */
-function AccountsSection({ entries, statuses, busy, now, t, onAdd, onAction }: {
+function AccountsSection({ entries, statuses, busy, now, t, onAdd, onAction, onRefreshAll }: {
   entries: readonly TaggedAccount[]
   statuses: Partial<Record<string, WorkBuddyWebStatus>>
   busy: boolean
@@ -869,10 +921,23 @@ function AccountsSection({ entries, statuses, busy, now, t, onAdd, onAction }: {
   t: Translate
   onAdd: () => void
   onAction: (variant: WorkBuddyCardVariant, action: WorkBuddyAccountAction) => void
+  /** Re-read every signed-in account's balance and state across both products. */
+  onRefreshAll: () => void
 }): React.ReactNode {
   return (
     <SettingsGroup
       title={t('accountHeading')}
+      // The refresh control sits on the heading's line, beside "Add account":
+      // both are actions on the whole list rather than on one row, and the
+      // heading is where the list's scope is already stated.
+      action={entries.length === 0 ? undefined : (
+        <ActionButton
+          label={t('accountRefreshAll')}
+          disabled={busy}
+          title={t('accountRefreshAllHint')}
+          onClick={onRefreshAll}
+        />
+      )}
       description={entries.length > 1 ? t('accountRotateHint') : t('accountEmptyHint')}
     >
       {/*
@@ -1344,16 +1409,6 @@ export interface WorkBuddySettingsPageProps {
    * that imported it would tie itself to a module the harness may not mount.
    */
   refreshPanel?: () => void
-  /**
-   * Select the dashboard in the centre column.
-   *
-   * Injected because the sidebar card is this plugin's ONLY other way in, and
-   * the card can be switched off from this very page. Without this row the
-   * switch would take the dashboard with it and leave no way back — a trap
-   * rather than a setting. Optional so a page mounted without the seam (tests,
-   * a profile with no layout) renders the switch alone instead of throwing.
-   */
-  openPanel?: () => void
 }
 
 /**
@@ -1362,8 +1417,19 @@ export interface WorkBuddySettingsPageProps {
  * Each product is driven by its own status document, so a failure or a slow
  * answer on one never blocks or blanks the other.
  */
-export function WorkBuddySettingsPage({ t, context, refreshPanel, openPanel }: WorkBuddySettingsPageProps): React.ReactNode {
-  const [statuses, setStatuses] = useState<Partial<Record<string, WorkBuddyWebStatus>>>({})
+export function WorkBuddySettingsPage({ t, context, refreshPanel }: WorkBuddySettingsPageProps): React.ReactNode {
+  // Seeded from the cache so the first paint already carries the accounts and
+  // balances the last visit saw, instead of an empty page while the live read is
+  // in flight. Read once, in the initializer: a later render must not resurrect a
+  // document the user has since replaced.
+  const [statuses, setStatuses] = useState<Partial<Record<string, WorkBuddyWebStatus>>>(() => {
+    const cached: Partial<Record<string, WorkBuddyWebStatus>> = {}
+    for (const variant of CARD_VARIANTS) {
+      const document = readCachedStatus(variant.id)
+      if (document !== undefined) cached[variant.id] = document
+    }
+    return cached
+  })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
   const [picking, setPicking] = useState(false)
@@ -1399,6 +1465,13 @@ export function WorkBuddySettingsPage({ t, context, refreshPanel, openPanel }: W
   /** True for the moment after a save landed, which is all the bar needs to say. */
   const [justSaved, setJustSaved] = useState(false)
   const mounted = useRef(true)
+  /**
+   * The latest documents, readable from a callback that must not re-create
+   * itself: `readAll` is a dependency of the polling effect, so rebuilding it on
+   * every document would restart the interval on every sweep.
+   */
+  const statusesRef = useRef<Partial<Record<string, WorkBuddyWebStatus>>>(statuses)
+  statusesRef.current = statuses
   useEffect(() => {
     mounted.current = true
     return () => { mounted.current = false }
@@ -1436,8 +1509,16 @@ export function WorkBuddySettingsPage({ t, context, refreshPanel, openPanel }: W
       return [variant.id, result.status] as const
     }))
     if (!mounted.current || signal?.aborted === true) return
-    const next: Partial<Record<string, WorkBuddyWebStatus>> = {}
-    for (const answer of answers) if (answer !== undefined) next[answer[0]] = answer[1]
+    // Merge rather than replace: an unreadable answer is dropped (above), and a
+    // product whose route answered nothing must keep the document already on
+    // screen — including the one the cache seeded — instead of blanking it.
+    const next: Partial<Record<string, WorkBuddyWebStatus>> = { ...statusesRef.current }
+    for (const answer of answers) {
+      if (answer === undefined) continue
+      next[answer[0]] = answer[1]
+      writeCachedStatus(answer[0], answer[1])
+    }
+    statusesRef.current = next
     setStatuses(next)
   }, [])
 
@@ -1681,6 +1762,66 @@ export function WorkBuddySettingsPage({ t, context, refreshPanel, openPanel }: W
     setJustSaved(false)
   }, [])
 
+  /**
+   * Re-read every account's balance and state, for every product that has one.
+   *
+   * One write per variant rather than per account: the host's `refresh-credits`
+   * drops that variant's whole cached credit map, so the next status read spends
+   * one billing request per account — which is exactly what the user asked for
+   * by pressing this, and what the ordinary minute-long sweep deliberately does
+   * not do.
+   *
+   * Only the account section is refreshed. The model catalogs have their own
+   * per-product Refresh buttons beside their headings, and folding them in here
+   * would make one button answer two different questions (and spend an upstream
+   * catalog request nobody asked for).
+   *
+   * A variant with no key (no document answered, or an older host withholding
+   * the control key) is skipped rather than reported as a failure: the page is
+   * already saying that product cannot be read, and this button is not the place
+   * for a second copy of that sentence.
+   */
+  const refreshAllAccounts = useCallback((): void => {
+    const targets = CARD_VARIANTS
+      .map(variant => ({ variant, key: keyFor(variant) }))
+      .filter((target): target is { variant: WorkBuddyCardVariant, key: string } => target.key !== undefined)
+    if (targets.length === 0) {
+      setError(t('requestFailed'))
+      return
+    }
+    setBusy(true)
+    setError(undefined)
+    setNotice(undefined)
+    void Promise.all(targets.map(async ({ variant, key }) => {
+      try {
+        const response = await fetch(variant.accountPath, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-WorkBuddy-Probe-Key': key },
+          credentials: 'same-origin',
+          body: JSON.stringify({ action: 'refresh-credits' } satisfies WorkBuddyAccountAction),
+        })
+        const value: unknown = await response.json().catch(() => undefined)
+        if (!response.ok) return 'HTTP ' + String(response.status)
+        if (typeof value === 'object' && value !== null && 'state' in value && value.state === 'failed') {
+          return String((value as Record<string, unknown>)['reason'] ?? t('requestFailed'))
+        }
+        return undefined
+      } catch (cause: unknown) {
+        return cause instanceof Error ? cause.message : t('requestFailed')
+      }
+    }))
+      .then(async failures => {
+        const first = failures.find((failure): failure is string => failure !== undefined)
+        if (first !== undefined) setError(first)
+        await readAll()
+        // The sidebar card and the composer badge read their own copies, so they
+        // are told now rather than at their next minute tick.
+        refreshPanel?.()
+      })
+      .catch((cause: unknown) => { setError(cause instanceof Error ? cause.message : t('requestFailed')) })
+      .finally(() => { if (mounted.current) setBusy(false) })
+  }, [keyFor, readAll, refreshPanel, t])
+
   const accountAction = useCallback((variant: WorkBuddyCardVariant, action: WorkBuddyAccountAction): void => {
     setError(undefined)
     setBusy(true)
@@ -1827,10 +1968,10 @@ export function WorkBuddySettingsPage({ t, context, refreshPanel, openPanel }: W
    * claims the other. The value comes back on the next status read, which is
    * what redraws the card.
    *
-   * One helper for both preferences because they are one wire shape — an action
-   * plus its value — and because the failure handling is the part that must not
-   * drift between them: a 400/404 means this host does not know the action, and
-   * that is the same story whichever control asked.
+   * One helper for all three preferences because they are one wire shape — an
+   * action plus its value — and because the failure handling is the part that
+   * must not drift between them: a 400/404 means this host does not know the
+   * action, and that is the same story whichever control asked.
    */
   const writeSidebarPreference = useCallback((body: Record<string, unknown>): void => {
     const variant = CARD_VARIANTS[0]
@@ -1881,6 +2022,17 @@ export function WorkBuddySettingsPage({ t, context, refreshPanel, openPanel }: W
    */
   const setCreditVisible = useCallback((visible: boolean): void => {
     writeSidebarPreference({ action: 'set-sidebar-credit-visible', enabled: visible })
+  }, [writeSidebarPreference])
+
+  /**
+   * Show or hide the composer dock's credit badge.
+   *
+   * A separate switch from the sidebar card above because it removes a different
+   * surface in a different place: the two are independent by design, and neither
+   * implies the other.
+   */
+  const setComposerCreditVisible = useCallback((visible: boolean): void => {
+    writeSidebarPreference({ action: 'set-composer-credit-visible', enabled: visible })
   }, [writeSidebarPreference])
 
   /**
@@ -1991,6 +2143,15 @@ export function WorkBuddySettingsPage({ t, context, refreshPanel, openPanel }: W
   const currentCreditVisible: boolean | undefined =
     statedPreference(statuses, status => status.sidebarCreditVisible)
 
+  /**
+   * Whether the host says the composer keeps its badge, when it says anything.
+   *
+   * Same `undefined`-means-older-host reading as the sidebar switch beside it,
+   * and the same reason: a control that cannot be saved is worse than no control.
+   */
+  const currentComposerCreditVisible: boolean | undefined =
+    statedPreference(statuses, status => status.composerCreditVisible)
+
   return (
     // The reference layout: a 720px column of groups of hairline-separated rows.
     // No card surfaces — the page has to read as one of the harness's own
@@ -2010,6 +2171,7 @@ export function WorkBuddySettingsPage({ t, context, refreshPanel, openPanel }: W
           // it cannot be inferred from the click.
           onAdd={() => { setError(undefined); setPicking(true) }}
           onAction={accountAction}
+          onRefreshAll={refreshAllAccounts}
         />
         {CARD_VARIANTS.map(variant => (
           <ModelsBlock
@@ -2091,18 +2253,28 @@ export function WorkBuddySettingsPage({ t, context, refreshPanel, openPanel }: W
             />
           )}
           {/*
-            * The way into the dashboard while the card is off.
+            * The composer badge switch, beside the sidebar card's own.
             *
-            * Only rendered when there is somewhere to navigate AND the surface
-            * that normally does it has been removed — a permanently visible
-            * duplicate of the sidebar card's own click would be one more row on
-            * a page whose whole design is that every row earns its place.
+            * Two switches rather than one because they remove different surfaces:
+            * the card is the sidebar's resident summary, while the badge is the
+            * figure in the composer row that also states what the turn cost. The
+            * dashboard is reachable through the card alone — the page deliberately
+            * carries no second entry (see {@link WorkBuddySettingsPageProps.openPanel}).
             */}
-          {currentCreditVisible !== false || openPanel === undefined ? null : (
+          {currentComposerCreditVisible === undefined ? null : (
             <SettingRow
-              title={t('sidebarDashboardLabel')}
-              description={t('sidebarDashboardHint')}
-              control={<ActionButton label={t('sidebarDashboardOpen')} onClick={openPanel} />}
+              title={t('composerVisibleLabel')}
+              titleFor="wbp-composer-visible"
+              description={t('composerVisibleHint')}
+              control={
+                <ToggleField
+                  id="wbp-composer-visible"
+                  label={t('composerVisibleLabel')}
+                  checked={currentComposerCreditVisible}
+                  disabled={busy}
+                  onChange={setComposerCreditVisible}
+                />
+              }
             />
           )}
         </SettingsGroup>

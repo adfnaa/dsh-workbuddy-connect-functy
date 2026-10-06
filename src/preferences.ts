@@ -89,6 +89,28 @@ export const WORKBUDDY_PREFERENCES = {
     // sidebar of anyone whose file predates the field.
     stated: (value: boolean): boolean => value !== false,
   },
+  /**
+   * Whether the composer dock keeps its WorkBuddy credit badge.
+   *
+   * A different surface from the sidebar card above, and a separate switch
+   * because the two answer different questions: the card is a resident summary
+   * of both pools, while the badge is one product's figure sitting in the row
+   * that also states what this turn cost. Someone who keeps the sidebar clean
+   * may still want the figure beside the context meter, and the reverse is just
+   * as ordinary — so neither switch implies the other.
+   *
+   * Plugin-wide for the same reason the other two are: the composer shows one
+   * row, and it renders whichever product the session's current model belongs
+   * to, so a per-product setting would leave the same check box meaning two
+   * different things depending on the model in effect.
+   */
+  composerCreditVisible: {
+    field: z.boolean().default(true)
+      .description('Show the WorkBuddy credit badge at the right of the composer dock, beside the context readout (off: the row keeps only the harness\'s own figures)'),
+    // Same reading as `sidebarCreditVisible`: an absent field is an older
+    // document, and "keep it as it was" has to mean the badge is still there.
+    stated: (value: boolean): boolean => value !== false,
+  },
 } as const
 
 /** Every preference's config-field name. */

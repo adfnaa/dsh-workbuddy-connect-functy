@@ -177,13 +177,15 @@ export const en = {
   sidebarStyleRemaining: 'Remaining only',
   sidebarStyleUsage: 'Used / total + bar',
   sidebarSettingUnsupported: 'This DSH host does not accept the setting. Restart DSH Desktop and try again.',
-  // Whether the sidebar carries that card at all, and where the dashboard lives
-  // while it does not.
+  // Whether each credit surface is drawn at all: the sidebar's card, and the
+  // composer dock's badge. Two switches, because they remove two surfaces.
   sidebarVisibleLabel: 'Sidebar credit card',
-  sidebarVisibleHint: 'Shows both products\' balances at the bottom of the sidebar. Off: no card is drawn there, and the dashboard is opened from the row below.',
-  sidebarDashboardLabel: 'Dashboard',
-  sidebarDashboardHint: 'Accounts, models and per-product totals. The sidebar card normally opens it; this row is the way in while that card is off.',
-  sidebarDashboardOpen: 'Open dashboard',
+  sidebarVisibleHint: 'Shows both products\' balances at the bottom of the sidebar. Off: no card is drawn there, and the dashboard is opened from the sidebar alone.',
+  composerVisibleLabel: 'Composer credit badge',
+  composerVisibleHint: 'Shows the selected product\'s balance at the right of the composer row, beside the context readout. Click it to list every account\'s credit.',
+  // Accounts: one action over the whole list.
+  accountRefreshAll: 'Refresh accounts',
+  accountRefreshAllHint: 'Re-reads every signed-in account\'s balance and state, across both products.',
   accountCredits: 'Credits {total}',
   accountCreditsPending: 'Credits —',
   accountSource: 'Source',
@@ -408,10 +410,11 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   sidebarStyleUsage: '已用 / 上限 + 进度条',
   sidebarSettingUnsupported: '当前 DSH 宿主不接受这个设置，重启 DSH Desktop 后再试。',
   sidebarVisibleLabel: '侧边栏额度卡片',
-  sidebarVisibleHint: '在侧栏底部显示两版的余额。关掉后侧栏不再画这张卡片，仪表盘改从下面一行打开。',
-  sidebarDashboardLabel: '仪表盘',
-  sidebarDashboardHint: '账号、模型与每版合计。平时由侧栏卡片打开；卡片关掉时，这一行就是入口。',
-  sidebarDashboardOpen: '打开仪表盘',
+  sidebarVisibleHint: '在侧栏底部显示两版的余额。关掉后侧栏不再画这张卡片，仪表盘只从侧栏卡片进入。',
+  composerVisibleLabel: '输入框额度徽标',
+  composerVisibleHint: '在输入框那一行最右侧（上下文占用右边）显示当前模型所属产品的余额，点击可展开各账号额度。',
+  accountRefreshAll: '刷新账号',
+  accountRefreshAllHint: '重新读取两版所有已登录账号的余额与状态。',
   accountCredits: '积分 {total}',
   accountCreditsPending: '积分 —',
   accountSource: '来源',
