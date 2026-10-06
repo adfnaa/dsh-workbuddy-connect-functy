@@ -358,24 +358,38 @@ export const PANEL_CSS = `
  *   LEFT of the meter; the flex order below is what moves it after.
  * - The dock centres its items, so being last is not the same as being at the
  *   edge. margin-left:auto absorbs the free space on the badge's left only, which
- *   pins it to the row's right end with the meter beside it. */
+ *   pins it to the row's right end with the meter beside it.
+ *
+ * The trigger copies the context meter's (.JObwrW_trigger) metrics: same radius
+ * token, same secondary text size, same 1px/8px padding and 6px gap, and the same
+ * hover/[aria-expanded] fill — the two sit side by side in one row, so any drift
+ * between them reads as one of the two being broken. */
 .wbp-creditBadgeRoot{flex:none;display:inline-flex;align-items:center;order:1;margin-left:auto;position:relative}
-.wbp-creditBadge{flex:none;align-items:baseline;gap:4px;display:inline-flex;white-space:nowrap;color:var(--dsw-alias-label-tertiary);font:inherit;font-size:12px;line-height:18px;font-variant-numeric:tabular-nums;background:0 0;border:1px solid transparent;border-radius:8px;padding:1px 6px;cursor:pointer}
-.wbp-creditBadge:hover{color:var(--dsw-alias-label-secondary);background:var(--dsw-alias-interactive-bg-hover)}
+.wbp-creditBadge{border-radius:var(--dsw-radius-sm);color:var(--dsw-alias-label-tertiary);font-family:inherit;font-size:var(--dsh-content-font-size-secondary,13px);font-variant-numeric:tabular-nums;line-height:calc(20px + var(--dsh-content-font-delta-secondary,0px));white-space:nowrap;cursor:pointer;background:0 0;border:none;flex:none;align-items:center;gap:6px;padding:1px 8px;display:inline-flex}
+.wbp-creditBadge:hover,.wbp-creditBadge[aria-expanded=true]{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}
 .wbp-creditBadge:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:1px}
-.wbp-creditBadgeName{color:var(--dsw-alias-label-tertiary)}
+.wbp-creditBadgeName{color:inherit}
 .wbp-creditBadgeValue{color:var(--dsw-alias-label-secondary)}
-/* The expanded panel: the harness's own popover material (menu surface, lv2
- * shadow, 12px radius), fixed-positioned from the trigger by useAnchoredPosition
- * so it survives scrolling the transcript. */
-.wbp-badgePanel{position:fixed;z-index:1000;min-width:232px;max-width:320px;padding:10px 12px;border-radius:12px;border:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-3);box-shadow:var(--dsw-shadow-lv2);color:var(--dsw-alias-label-primary);display:flex;flex-direction:column;gap:10px}
-.wbp-badgePanelTitle{margin:0;color:var(--dsw-alias-label-tertiary);font-size:11px;font-weight:600;line-height:16px}
-.wbp-badgeGroup{display:flex;flex-direction:column;gap:4px}
-.wbp-badgeGroupTitle{margin:0;color:var(--dsw-alias-label-secondary);font-size:11px;font-weight:600;line-height:16px}
-.wbp-badgeAccounts{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:2px}
-.wbp-badgeAccount{display:flex;align-items:baseline;gap:12px;font-size:12px;line-height:18px}
-.wbp-badgeAccountName{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary)}
-.wbp-badgeAccountValue{flex:none;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums;white-space:nowrap}
+.wbp-creditBadge[aria-expanded=true] .wbp-creditBadgeValue{color:var(--dsw-alias-label-primary)}
+/* The expanded panel: the context popover's own material (.JObwrW_panel) —
+ * the menu surface plus its backdrop filter, the prominent elevation token, the
+ * same 12px/-lg radius, the same min(264px, …) width, and the same 12px padding
+ * and 12px type. Fixed-positioned from the trigger (and portalled) so it survives
+ * scrolling and the composer's own overflow. */
+.wbp-badgePanel{position:fixed;z-index:1100;box-sizing:border-box;border-radius:var(--dsw-radius-lg);background:var(--dsw-specific-menu);width:min(264px,100vw - 24px);backdrop-filter:var(--dsw-menu-backdrop-filter);--dsw-elevation-stroke-color:var(--dsw-alias-border-l1);box-shadow:var(--dsw-elevation-prominent);color:var(--dsw-alias-label-secondary);cursor:default;border:0;padding:12px;font-size:12px;line-height:20px}
+/* One product's block, with the pool's own line above its accounts. Separated by
+ * a margin rather than a rule: the context popover's two sections are set apart
+ * the same way, and a hairline here would draw a card the row above does not. */
+.wbp-badgeGroup+.wbp-badgeGroup{margin-top:12px}
+.wbp-badgeGroupHead{display:flex;align-items:center;gap:6px}
+.wbp-badgeGroupName{color:var(--dsw-alias-label-tertiary)}
+.wbp-badgeGroupTotal{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary);margin-left:auto;font-weight:500}
+.wbp-badgeBar{corner-shape:round;background:var(--dsw-alias-interactive-bg-hover);border-radius:999px;height:4px;margin:10px 0 12px;display:flex;overflow:hidden}
+.wbp-badgeBarFill{background:var(--dsw-alias-brand-primary);border-radius:1px;min-width:2px;height:100%;display:block}
+.wbp-badgeRows{margin:6px 0 0}
+.wbp-badgeRow{justify-content:space-between;align-items:center;gap:12px;padding:2px 0;display:flex}
+.wbp-badgeRow dt{color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.wbp-badgeRow dd{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-primary);margin:0;white-space:nowrap}
 /* -------------------------------------------------------- the rail icon */
 .wbp-railButton{box-sizing:border-box;width:36px;height:36px;color:var(--dsw-alias-label-secondary);cursor:pointer;background:0 0;border:1px solid transparent;border-radius:8px;flex:none;justify-content:center;align-items:center;margin:0 0 4px;padding:0;display:inline-flex}
 .wbp-railButton:hover{color:var(--dsw-alias-label-primary);background:var(--dsw-alias-interactive-bg-hover)}

@@ -185,6 +185,32 @@ describe('the composer credit badge', () => {
     expect(text).not.toContain('WorkBuddy AI')
   })
 
+  it('draws the panel in the same shape the harness uses for its context popover', async () => {
+    // The two sit in one row and open the same way, so the panel mirrors the
+    // context meter's markup and material (see the CSS block): a group head with
+    // the pool's total on the trailing edge, the capacity bar, then dl/dt/dd
+    // rows. This pins the structure so a later refactor cannot quietly turn it
+    // into a second, differently-shaped popover.
+    documents[CARD_VARIANTS[0]!.statusPath] = signedInWithAccounts([
+      { id: 'cn:1', name: '账号甲', credits: 5266, creditsTotal: 10000 },
+    ])
+    documents[CARD_VARIANTS[1]!.statusPath] = signedInWithAccounts([])
+    view = await mount()
+    await act(async () => { view?.root.findByType('button').props.onClick() })
+
+    const panel = view.root.findByProps({ role: 'dialog' })
+    expect(panel.props['aria-label']).toBe('Credit by account')
+    // The pool total heads its own group, and the bar carries the ratio.
+    const head = view.root.findAllByProps({ className: 'wbp-badgeGroupTotal' })
+    expect(head).toHaveLength(1)
+    expect(head[0]!.children).toEqual(['5,266'])
+    const fill = view.root.findByProps({ className: 'wbp-badgeBarFill' })
+    expect(fill.props.style.width).toBe('52.66%')
+    // Rows are description-list entries, as the context popover's breakdown is.
+    expect(view.root.findAllByType('dt')).toHaveLength(1)
+    expect(view.root.findAllByType('dd')).toHaveLength(1)
+  })
+
   it('renders nothing at all when the host says the badge is off', async () => {
     // The switch removes the surface, not its figures: nothing is left in the
     // row, and the panel cannot be opened because there is no trigger.

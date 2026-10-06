@@ -10,9 +10,18 @@
  *
  * Why the click expands: the badge states one pool's total, but an account is
  * what a user acts on. Expanding in place answers "which account, and how much is
- * left on it" without a trip to the settings page, and it is the same interaction
- * the harness's own context meter uses — an anchored panel above the trigger,
- * dismissed by an outside pointer or Escape, placed with the same primitives.
+ * left on it" without a trip to the settings page.
+ *
+ * The panel is deliberately a copy of the harness's OWN context popover
+ * (ui-conversation's `ContextMeter`) rather than a shape of this plugin's
+ * invention, because the two sit in the same row and are opened the same way:
+ * the same placement and dismissal primitives (`useAnchoredPosition` above the
+ * trigger, `useDismissOnOutsidePointer`, Escape), the same menu material and
+ * elevation tokens, the same `min(264px, …)` width, the same header/rows
+ * geometry, and the same portal into `document.body` — portalled because the
+ * composer's own overflow would otherwise crop an anchored panel at the tool
+ * row's edge. A user who has opened the context readout has already seen this
+ * panel, so it must not read as a second, slightly different one.
  *
  * Why it is conditional on the model: the figure describes the quota behind the
  * model about to answer. Showing it while another provider is selected would
@@ -37,6 +46,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import type { ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { ModelDirectory } from '@deepseek-ai/dsh-client-ui-model-selection/client'
 import { Tooltip, useAnchoredPosition, useDismissOnOutsidePointer } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { WorkBuddyWebAccount } from '../status-paths.ts'
@@ -62,14 +73,13 @@ function formatCredit(value: number): string {
 }
 
 /**
- * One account's line inside the expanded panel.
+ * One account's line inside the panel.
  *
  * An account that reported no balance says so rather than showing a zero: "not
  * read yet" and "this account is empty" are different facts, and only the second
- * is worth acting on. A benched account is named as such for the same reason —
- * the figure alone would look like an account that is simply not being used.
+ * is worth acting on.
  */
-function AccountRow({ account, t }: { account: WorkBuddyWebAccount, t: PanelTranslator }): React.ReactNode {
+function AccountRow({ account, t }: { account: WorkBuddyWebAccount, t: PanelTranslator }): ReactNode {
   const name = account.label ?? account.nickname ?? account.name
   const figure = account.credits === undefined
     ? t('accountCreditsPending')
@@ -77,29 +87,48 @@ function AccountRow({ account, t }: { account: WorkBuddyWebAccount, t: PanelTran
       ? t('accountCreditsOnly', { remaining: formatCredit(account.credits) })
       : t('accountCreditsRow', { remaining: formatCredit(account.credits), total: formatCredit(account.creditsTotal) })
   return (
-    <li className="wbp-badgeAccount">
-      <span className="wbp-badgeAccountName" title={name}>{name}</span>
-      <span className="wbp-badgeAccountValue">{figure}</span>
-    </li>
+    <div className="wbp-badgeRow">
+      <dt title={name}>{name}</dt>
+      <dd>{figure}</dd>
+    </div>
   )
 }
 
 /**
- * One product's block: its heading and one row per account it has.
+ * One product's block: its heading, the pool's fill, and one row per account.
  *
  * A product with no accounts renders nothing at all rather than an empty
  * heading: the panel is a statement about the pools the user actually has, and a
  * product nobody signed into has no figures to state. (The sidebar card's own
  * rule, applied here for the same reason.)
+ *
+ * The bar is drawn only when the pool's capacity can be stated COMPLETELY — the
+ * same rule the sidebar card follows, so a fill never implies a total that
+ * silently ignores an account whose cap went unreported.
  */
-function ProductBlock({ product, t }: { product: PanelProductView, t: PanelTranslator }): React.ReactNode {
+function ProductBlock({ product, t }: { product: PanelProductView, t: PanelTranslator }): ReactNode {
   if (product.accounts.length === 0) return null
+  const remaining = product.creditsRemaining
+  const capacity = product.creditsCapacity
+  const ratio = remaining === undefined || capacity === undefined || capacity <= 0
+    ? undefined
+    : Math.min(1, Math.max(0, remaining / capacity))
   return (
     <section className="wbp-badgeGroup">
-      <h3 className="wbp-badgeGroupTitle">{product.name}</h3>
-      <ul className="wbp-badgeAccounts">
+      <div className="wbp-badgeGroupHead">
+        <span className="wbp-badgeGroupName">{product.name}</span>
+        <span className="wbp-badgeGroupTotal">
+          {remaining === undefined ? t('creditPending') : formatCredit(remaining)}
+        </span>
+      </div>
+      {ratio === undefined ? null : (
+        <div className="wbp-badgeBar">
+          <span className="wbp-badgeBarFill" style={{ width: `${String(ratio * 100)}%` }} />
+        </div>
+      )}
+      <dl className="wbp-badgeRows">
         {product.accounts.map(account => <AccountRow key={account.id} account={account} t={t} />)}
-      </ul>
+      </dl>
     </section>
   )
 }
@@ -111,7 +140,7 @@ function ProductBlock({ product, t }: { product: PanelProductView, t: PanelTrans
  * subscribe/snapshot pair the probe control uses, so a model switch and a landed
  * sweep each update the figure in place.
  */
-export function WorkBuddyCreditBadge({ directory, panel, t }: WorkBuddyCreditBadgeProps): React.ReactNode {
+export function WorkBuddyCreditBadge({ directory, panel, t }: WorkBuddyCreditBadgeProps): ReactNode {
   const subscribeDirectory = useCallback((listener: () => void) => directory.subscribe(listener), [directory])
   const readDirectory = useCallback(() => directory.getSnapshot(), [directory])
   const selection = useSyncExternalStore(subscribeDirectory, readDirectory, readDirectory).current
@@ -138,15 +167,14 @@ export function WorkBuddyCreditBadge({ directory, panel, t }: WorkBuddyCreditBad
     && product.state === 'signed-in'
     && remaining !== undefined
 
-  // Placement and dismissal are the harness's own: the panel hangs above the
-  // trigger, anchored to its trailing edge so it cannot run off the composer, and
-  // closes on an outside pointer or Escape — the same pair ContextMeter uses.
+  // Placement and dismissal are the harness's own, with the same options its
+  // context popover passes: above the trigger, 8px clear of it, 12px inside the
+  // frame.
   const position = useAnchoredPosition({
     open: open && available,
     anchorRef: rootRef,
     panelRef,
     side: 'top',
-    align: 'end',
     gap: 8,
     margin: 12,
   })
@@ -172,32 +200,42 @@ export function WorkBuddyCreditBadge({ directory, panel, t }: WorkBuddyCreditBad
   if (!available) return null
 
   const label = t('creditBadgeLabel', { product: card.appName, remaining: formatCredit(remaining) })
+  const panelBody = (
+    <div
+      className="wbp-badgePanel"
+      ref={panelRef}
+      // Hidden until measured, exactly as the context popover does it: the panel
+      // must be in the document for useAnchoredPosition to measure it, and a
+      // first frame at 0,0 in the corner would flash.
+      style={position ?? { visibility: 'hidden', left: 0, top: 0 }}
+      role="dialog"
+      aria-label={t('creditBadgePanelTitle')}
+    >
+      {view.products.map(candidate => <ProductBlock key={candidate.id} product={candidate} t={t} />)}
+    </div>
+  )
   return (
     <span className="wbp-creditBadgeRoot" ref={rootRef} data-workbuddy-credit-badge="">
       <Tooltip label={label} side="top" delayMs={200} disabled={open}>
         <button
           type="button"
           className="wbp-creditBadge"
-          aria-expanded={open}
           aria-label={label}
+          aria-haspopup="dialog"
+          aria-expanded={open}
           onClick={() => { setOpen(current => !current) }}
         >
           <span className="wbp-creditBadgeName">{card.appName}</span>
           <span className="wbp-creditBadgeValue">{formatCredit(remaining)}</span>
         </button>
       </Tooltip>
-      {open ? (
-        <div
-          className="wbp-badgePanel"
-          ref={panelRef}
-          style={position ?? undefined}
-          role="dialog"
-          aria-label={t('creditBadgePanelTitle')}
-        >
-          <p className="wbp-badgePanelTitle">{t('creditBadgePanelTitle')}</p>
-          {view.products.map(candidate => <ProductBlock key={candidate.id} product={candidate} t={t} />)}
-        </div>
-      ) : null}
+      {open
+        // Portalled for the same reason the context popover is: the composer's
+        // own overflow would crop an anchored panel at the tool row's edge. A
+        // document-less render falls back to inline so the component stays
+        // renderable without a DOM.
+        ? typeof document === 'undefined' ? panelBody : createPortal(panelBody, document.body)
+        : null}
     </span>
   )
 }
