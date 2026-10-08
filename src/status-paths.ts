@@ -119,7 +119,7 @@ export interface WorkBuddyProbeAction {
    * Every one of them is a write, which is why they share this route's
    * in-process key and loopback guards rather than the read-only status GET.
    */
-  action: 'probe' | 'clear' | 'refresh' | 'set-maximum-context-window' | 'set-model-visibility' | 'set-model-allowlist' | 'open-link' | 'set-sidebar-credit-style' | 'set-sidebar-credit-visible' | 'set-composer-credit-visible' | 'set-probe-control-visible'
+  action: 'probe' | 'clear' | 'refresh' | 'set-maximum-context-window' | 'set-model-visibility' | 'set-model-allowlist' | 'set-visibility-account' | 'open-link' | 'set-sidebar-credit-style' | 'set-sidebar-credit-visible' | 'set-composer-credit-visible' | 'set-probe-control-visible' | 'check-in' | 'set-auto-check-in' | 'set-check-in-minute' | 'clear-check-in-logs'
   /** Target model id; required for `probe` and `set-model-visibility`. */
   model?: string
   /**
@@ -163,12 +163,35 @@ export interface WorkBuddyProbeAction {
    */
   url?: string
   /**
-   * Expected account key for `set-model-visibility`: the `visibility.account`
-   * the card rendered its checkboxes from. The host refuses the write when the
-   * signed-in account has moved on, so a stale card can never land one
-   * account's toggle in another account's bucket.
+   * The account a visibility action is about.
+   *
+   * Two actions read it, and both mean "this account, by identity":
+   *
+   * - `set-model-visibility` / `set-model-allowlist`: the `visibility.account`
+   *   the card rendered its controls from. The host refuses a write whose account
+   *   is not one of this variant's pool members, so a stale card can never land
+   *   one account's toggle in another account's bucket.
+   * - `set-visibility-account`: the account whose list the card should now edit.
+   *   An empty string is meaningful here — it means "follow the primary
+   *   account", which is the state every build before this one was in.
    */
   account?: string
+  /**
+   * Requested on/off value for `set-auto-check-in`.
+   *
+   * Reuses the same field as the display switches above for the same reason:
+   * the wire carries the desired state itself, so a retried request is
+   * idempotent and a lost one cannot leave the setting half-toggled.
+   */
+  autoCheckIn?: boolean
+  /**
+   * Requested moment for `set-check-in-minute`, as minutes past midnight UTC+8.
+   *
+   * Sending the whole value rather than a delta keeps the write idempotent. The
+   * host clamps it, so a malformed value from a stale card cannot schedule a
+   * run for a minute that does not exist.
+   */
+  minuteOfDay?: number
 }
 
 /**
@@ -195,6 +218,119 @@ export interface WorkBuddyWebVisibilitySection {
    * disk: see {@link WorkBuddyProbeAction}.
    */
   allowlist?: readonly string[]
+  /**
+   * The pool accounts this one may be switched to, in pool order.
+   *
+   * Present — even when it holds a single entry — on every host that knows the
+   * action, which is what the card's account selector keys on. A host that
+   * does not send it renders no selector, exactly like the other optional
+   * sections: a control whose write would be refused is worse than no control.
+   *
+   * These are the pool's members rather than only the usable ones: a benched
+   * account is still one the user may want to configure models for, and the
+   * selector is a preference editor rather than a routing decision.
+   */
+  choices?: readonly WorkBuddyWebVisibilityChoice[]
+  /**
+   * Which account `account` was chosen over, when the user picked one.
+   *
+   * Omitted while the primary rule is in force — the default, and the meaning
+   * an older card's documents had. `false` is not a state here: the chosen
+   * account either is a pool member (and then it is named) or the preference
+   * has fallen back to the primary.
+   */
+  chosen?: boolean
+}
+
+/** One account the model filter may be keyed by. */
+export interface WorkBuddyWebVisibilityChoice {
+  /** `uid:enterpriseId` pool identity. */
+  id: string
+  /** Display name: the user's label, else the nickname, else a short uid. */
+  name: string
+  /** Whether this is the account the section above is describing. */
+  active: boolean
+}
+
+/**
+ * Daily benefit check-in, as the card renders it.
+ *
+ * The settings travel WITH the record rather than over a separate read: the
+ * card draws one section — a switch, a moment, and what happened — and
+ * splitting them would let the section render a switch whose value it did not
+ * have, or a log for a product it was not told about.
+ *
+ * `auto` reflects the host's config, so a card can never claim a switch is on
+ * when the host would not actually run. The log is absent rather than empty for
+ * a product that has never checked in, which is a different statement from
+ * "checked in and never succeeded".
+ *
+ * **One entry per pool account**, because the upstream grants one daily benefit
+ * per account and the host therefore claims for all of them. A single day flag
+ * would be a lie about which accounts are still owed a claim — and it was the
+ * defect this shape replaced: with several accounts signed in, only the first
+ * one was ever claimed for.
+ */
+export interface WorkBuddyWebCheckInSection {
+  /** Whether the host will claim automatically for this product. */
+  auto: boolean
+  /** When it would claim, as minutes past midnight UTC+8. */
+  minuteOfDay: number
+  /**
+   * When the next run is due, epoch ms, when the host has one armed.
+   *
+   * Omitted when automatic check-in is off: nothing is armed then, and a
+   * timestamp would promise a run that will not happen.
+   */
+  nextRunAt?: number
+  /**
+   * One row per account the product can claim for, in pool order.
+   *
+   * Optional because the halves update independently: a browser half that has
+   * been refreshed runs against whatever host is installed, and a host from
+   * before this field existed claims for one account and says nothing here. The
+   * card then draws the section without the per-account list rather than
+   * inventing a pool it was not told about — the same degradation `logs` uses.
+   *
+   * Empty is a different answer from absent: a signed-in product whose pool the
+   * host could not read has nothing to claim for, and says so.
+   */
+  accounts?: readonly WorkBuddyWebCheckInAccount[]
+  /** The last day any account settled, `YYYY-MM-DD`; absent when none has. */
+  lastDate?: string
+  /** Most recent attempts across every account, newest first. */
+  logs?: readonly WorkBuddyWebCheckInLog[]
+}
+
+/** One account's check-in state, as the card renders it. */
+export interface WorkBuddyWebCheckInAccount {
+  /** Pool identity (`uid:enterpriseId`). */
+  id: string
+  /** Display name, so a row says which account it is about. */
+  name: string
+  /** Whether today's benefit is already settled for this account. */
+  settled: boolean
+  /** The last settled day for this account, `YYYY-MM-DD`, when it has one. */
+  lastDate?: string
+  /** When this account was last attempted, epoch ms. */
+  lastAt?: number
+  /** What that attempt produced. */
+  status?: 'claimed' | 'already-claimed' | 'no-campaign' | 'error'
+  /** Credits it was granted, when the answer stated a figure. */
+  amount?: number
+}
+
+/** One logged check-in attempt. */
+export interface WorkBuddyWebCheckInLog {
+  id: string
+  date: string
+  timestamp: number
+  status: 'claimed' | 'already-claimed' | 'no-campaign' | 'error'
+  /** Credits granted, when the answer stated a figure. */
+  amount?: number
+  message?: string
+  /** Which account the attempt was for, when the row knows. */
+  account?: string
 }
 
 /**
@@ -593,6 +729,15 @@ export type WorkBuddyWebStatus =
     useMaximumContextWindow?: boolean
     /** Per-account hidden-model state for the card's visibility controls. */
     visibility?: WorkBuddyWebVisibilitySection
+    /**
+     * Daily benefit check-in: how it is configured, and what it has done.
+     *
+     * Part of the signed-in document because that is the only state the switches
+     * are reachable from where they mean anything — the card's check-in section
+     * is a row of the same accounts-and-credit page, and a product with no
+     * account has no benefit to claim.
+     */
+    checkIn?: WorkBuddyWebCheckInSection
     /**
      * A diagnosable problem reading the desktop app's own credential, while the
      * pool still serves from its other members.

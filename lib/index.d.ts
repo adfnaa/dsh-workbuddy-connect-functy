@@ -6,7 +6,7 @@ import { Context } from "@deepseek-ai/cordis";
 import { SettingsNamespace } from "@deepseek-ai/dsh-settings";
 import { AttachmentStore } from "@deepseek-ai/dsh-attachment";
 //#region src/app-version.d.ts
-/** Basename of the saved version under `$DSH_HOME`. */
+/** Basename of the saved version inside the plugin's state directory. */
 declare const WORKBUDDY_APP_VERSION_FILENAME = ".workbuddy-ai-version.json";
 /** Where the version came from, for `doctor` output. */
 type WorkBuddyAppVersionSource = 'installed' | 'saved' | 'fallback';
@@ -85,7 +85,7 @@ declare function appUserAgent(version: string): string;
  */
 declare const FALLBACK_CN_APP_VERSION = "5.5.6";
 /**
- * Basename of the CN saved-version cache under `$DSH_HOME`.
+ * Basename of the CN saved-version cache inside the plugin's state directory.
  *
  * Deliberately not the international `.workbuddy-ai-version.json`: that file
  * feeds the international catalog's User-Agent, and a CN App writing its
@@ -137,7 +137,7 @@ interface ResolveChatIdentityOptions {
   resolveIntl?: () => Promise<AppVersionInfo>;
   /** CLI-version reader; defaults to reading the bundle's `cli/package.json`. */
   cliVersion?: (bundle: string) => Promise<string | undefined>;
-  /** CN saved-cache path; defaults to `$DSH_HOME/.workbuddy-app-version.json`. */
+  /** CN saved-cache path; defaults to `.workbuddy-app-version.json` in the plugin's state directory. */
   cnSavedPath?: string;
 }
 /**
@@ -677,10 +677,10 @@ interface WorkBuddyVariant {
   electron?: WorkBuddyElectronProduct;
   /** Basename of the desktop app's own auth file in the shared auth directory. */
   desktopFilename: string;
-  /** Basename of the plugin-owned credential copy under `$DSH_HOME`. */
+  /** Basename of the plugin-owned credential copy in the plugin's config directory. */
   ownFilename: string;
   /**
-   * Basename of the plugin-owned account-pool file under `$DSH_HOME`.
+   * Basename of the plugin-owned account-pool file in the plugin's config directory.
    *
    * One pool per variant, for the same reason the catalogs are split: the two
    * products are separate subscriptions, and an account signed into one has no
@@ -690,18 +690,18 @@ interface WorkBuddyVariant {
    */
   accountFilename: string;
   /**
-   * Basename of the plugin-owned context-length preference file under
-   * `$DSH_HOME`.
+   * Basename of the plugin-owned context-length preference file in the plugin's
+   * config directory.
    *
    * One per variant for the same reason as the pools: the two products declare
    * different windows for the same model id, so a length chosen for one must not
    * be applied to the other.
    */
   contextFilename: string;
-  /** Basename of the plugin-owned probe-record file under `$DSH_HOME`. */
+  /** Basename of the plugin-owned probe-record file in the plugin's state directory. */
   probeFilename: string;
   /**
-   * Basename of the plugin-owned request-usage file under `$DSH_HOME`.
+   * Basename of the plugin-owned request-usage file in the plugin's state directory.
    *
    * One per variant like the pools and catalogs: the two products have separate
    * subscriptions, so one product's request tally must never be read as the
@@ -709,7 +709,7 @@ interface WorkBuddyVariant {
    */
   usageFilename: string;
   /**
-   * Basename of the plugin-owned saved-catalog file under `$DSH_HOME`.
+   * Basename of the plugin-owned saved-catalog file in the plugin's state directory.
    *
    * One per variant, like the probe records: the two endpoints disagree about
    * rates, windows, and even which models exist for a shared id, so a catalog
@@ -717,8 +717,8 @@ interface WorkBuddyVariant {
    */
   catalogFilename: string;
   /**
-   * Basename of the plugin-owned per-account model-visibility file under
-   * `$DSH_HOME`.
+   * Basename of the plugin-owned per-account model-visibility file in the
+   * plugin's config directory.
    *
    * One per variant, for the same reason as the catalogs and probe records:
    * the two endpoints share model ids, so one variant's hidden list must never
@@ -975,7 +975,7 @@ interface WorkBuddyStoreOptions {
   variant?: WorkBuddyVariant;
   /** Explicit desktop auth-file path, overriding env and platform defaults. */
   desktopPath?: string;
-  /** Explicit plugin-owned copy path, defaulting under `$DSH_HOME`. */
+  /** Explicit plugin-owned copy path, defaulting into the plugin's config directory. */
   ownPath?: string;
   /** Performs the upstream token refresh. */
   refresh: (credential: WorkBuddyCredential) => Promise<WorkBuddyRefreshOutcome>;
@@ -989,11 +989,11 @@ interface WorkBuddyStoreOptions {
    */
   keyProvider?: Pick<WorkBuddyAtRestKeyProvider, 'protectorKeyFor' | 'helperPath'>;
 }
-/** Basename of the plugin-owned credential copy inside the Harness home. */
+/** Basename of the plugin-owned credential copy inside the plugin's config directory. */
 declare const WORKBUDDY_AUTH_FILENAME = ".workbuddy-auth.json";
 /** Env variable that overrides the desktop auth-file location. */
 declare const WORKBUDDY_AUTH_FILE_ENV = "WORKBUDDY_AUTH_FILE";
-/** Plugin-owned copy path inside the Harness home. */
+/** Plugin-owned copy path inside the plugin's config directory. */
 declare function workbuddyOwnAuthPath(): string;
 /**
  * Platform-default candidates for the WorkBuddy desktop app's auth file, in
@@ -1377,7 +1377,7 @@ declare class WorkBuddyCatalog {
 }
 //#endregion
 //#region src/probe-store.d.ts
-/** Basename of the probe record inside the Harness home. */
+/** Basename of the probe record inside the plugin's state directory. */
 declare const WORKBUDDY_PROBE_FILENAME = ".workbuddy-probe.json";
 /**
  * Whether the model's effort parameter is actually validated.
@@ -1414,7 +1414,7 @@ interface WorkBuddyProbeRecord {
   account: string;
 }
 /**
- * Plugin-owned probe record path inside the Harness home.
+ * Plugin-owned probe record path inside the plugin's state directory.
  *
  * One file per variant. Same-named models exist on both endpoints (the
  * international catalog repeats `glm-5.3`, `glm-5.2`, `hy3`, `kimi-k2.6`), and
@@ -1434,7 +1434,7 @@ declare function workbuddyProbePath(filename?: string): string;
 declare function fingerprintModel(info: WorkBuddyModelInfo): string;
 /** Options for {@link WorkBuddyProbeStore}. */
 interface WorkBuddyProbeStoreOptions {
-  /** Explicit state-file path, overriding the `$DSH_HOME` default. */
+  /** Explicit state-file path, overriding the plugin's state-directory default. */
   path?: string;
   /** Observation lifetime; defaults to 14 days. */
   ttlMs?: number;
@@ -1660,7 +1660,7 @@ interface WorkBuddyAdapter {
 declare function createWorkBuddyAdapter(options: WorkBuddyAdapterOptions): WorkBuddyAdapter;
 //#endregion
 //#region src/account-pool.d.ts
-/** Basename of the CN variant's account-pool file inside the Harness home. */
+/** Basename of the CN variant's account-pool file in the plugin's config directory. */
 declare const WORKBUDDY_ACCOUNTS_FILENAME = ".workbuddy-accounts.json";
 /** Why an account was benched. */
 type WorkBuddyCooldownReason = 'rate' | 'credit' | 'session';
@@ -1782,15 +1782,24 @@ declare function cooldownDurationMs(reason: WorkBuddyCooldownReason, strikes: nu
 declare function accountIdOf(uid: string, enterpriseId?: string): string;
 /** The identity key of a credential. */
 declare function credentialAccountId(credential: Pick<WorkBuddyCredential, 'uid' | 'enterpriseId'>): string;
+/**
+ * The name a surface shows for one account: the user's label, else the upstream
+ * nickname, else a short uid.
+ *
+ * One implementation because the card, the CLI listing and a check-in log row
+ * all answer the same question, and a second copy would eventually disagree
+ * about what an account is called on one surface and another.
+ */
+declare function accountDisplayName(account: Pick<WorkBuddyAccount, 'uid' | 'label' | 'nickname'>): string;
 /** Project one stored account back into the credential shape the wire layer takes. */
 declare function credentialOf(account: WorkBuddyAccount): WorkBuddyCredential;
 /** Options for {@link WorkBuddyAccountPool}. */
 interface WorkBuddyAccountPoolOptions {
   variant: WorkBuddyVariant;
-  /** Explicit pool-file path, overriding the `$DSH_HOME` default. */
+  /** Explicit pool-file path, overriding the plugin's config-directory default. */
   path?: string;
 }
-/** Pool-file path for one variant inside the Harness home. */
+/** Pool-file path for one variant inside the plugin's config directory. */
 declare function workbuddyAccountsPath(filename?: string): string;
 /**
  * The account pool for one variant.
@@ -2270,6 +2279,29 @@ declare class WorkBuddyAccountService {
   /** The identity {@link primaryCredential} would answer for. */
   primaryIdentity(): Promise<string | undefined>;
   /**
+   * Every account this variant may send a request as, in pool order.
+   *
+   * The whole pool, deliberately not only the *available* ones: an account
+   * benched for an hour is still entitled to today's benefit, and deciding
+   * "usable right now" is the caller's business — the check-in asks only "who
+   * does this product have". A disabled account is left out, because the
+   * enable switch is the user's own statement about whether the plugin may
+   * spend this account at all, and the check-in must honour it like every other
+   * request path does.
+   */
+  claimableAccounts(): readonly WorkBuddyAccount[];
+  /**
+   * One account's credential by identity, refreshed if it is at or near expiry.
+   *
+   * The per-account sibling of {@link primaryCredential}, for callers that must
+   * act as a NAMED account rather than as whichever one is primary: the daily
+   * check-in claims once per pool member, so "the account this is for" is the
+   * whole point and cannot be resolved by the primary rule. Returning undefined
+   * means the identity is no longer in the pool (removed while a timer was
+   * pending), which is a skip rather than a failure.
+   */
+  credentialFor(id: string): Promise<WorkBuddyCredential | undefined>;
+  /**
    * Refresh an account whose access token is at or near expiry.
    *
    * The pool's own copy is the one that gets updated, so a refresh survives a
@@ -2486,7 +2518,7 @@ declare class WorkBuddyRotation {
 }
 //#endregion
 //#region src/catalog-store.d.ts
-/** Basename of the CN variant's saved catalog inside the Harness home. */
+/** Basename of the CN variant's saved catalog inside the plugin's state directory. */
 declare const WORKBUDDY_CATALOG_FILENAME = ".workbuddy-catalog.json";
 /** One saved catalog: the account it belonged to, and the models it listed. */
 interface SavedCatalog {
@@ -2500,11 +2532,11 @@ interface SavedCatalog {
   /** App version used as the UA, when the variant needed one. */
   appVersion?: string;
 }
-/** Plugin-owned saved-catalog path inside the Harness home. */
+/** Plugin-owned saved-catalog path inside the plugin's state directory. */
 declare function workbuddyCatalogPath(filename?: string): string;
 /** Options for {@link WorkBuddyCatalogStore}. */
 interface WorkBuddyCatalogStoreOptions {
-  /** Explicit state-file path, overriding the `$DSH_HOME` default. */
+  /** Explicit state-file path, overriding the plugin's state-directory default. */
   path?: string;
 }
 /**
@@ -2563,13 +2595,13 @@ declare class WorkBuddyCatalogStore {
  *
  * @module dsh-workbuddy-connect/visibility-store
  */
-/** Basename of the CN variant's visibility file inside the Harness home. */
+/** Basename of the CN variant's visibility file inside the plugin's config directory. */
 declare const WORKBUDDY_VISIBILITY_FILENAME = ".workbuddy-model-visibility.json";
-/** Plugin-owned visibility-file path inside the Harness home. */
+/** Plugin-owned visibility-file path inside the plugin's config directory. */
 declare function workbuddyVisibilityPath(filename?: string): string;
 /** Options for {@link WorkBuddyVisibilityStore}. */
 interface WorkBuddyVisibilityStoreOptions {
-  /** Explicit state-file path, overriding the `$DSH_HOME` default. */
+  /** Explicit state-file path, overriding the plugin's config-directory default. */
   path?: string;
 }
 /**
@@ -2712,9 +2744,10 @@ declare class WorkBuddyProbeService {
 //#endregion
 //#region src/host-heartbeat.d.ts
 /**
- * Host-side heartbeat: a small JSON file written under `$DSH_HOME` once the
- * `workbuddy` provider is registered. The status CLI reads it to report
- * whether the host bundle is alive, independent of the browser card.
+ * Host-side heartbeat: a small JSON file written into the plugin's own state
+ * directory once the `workbuddy` provider is registered. The status CLI reads
+ * it to report whether the host bundle is alive, independent of the browser
+ * card.
  *
  * The browser (client) bundle cannot write files; its health is reported
  * only through `console.error` on failure (see `src/client/index.tsx`).
@@ -2723,7 +2756,7 @@ declare class WorkBuddyProbeService {
  *
  * @module dsh-workbuddy-connect/host-heartbeat
  */
-/** Basename of the host heartbeat file inside the Harness home. */
+/** Basename of the host heartbeat file inside the plugin's state directory. */
 declare const WORKBUDDY_HOST_HEARTBEAT_FILENAME = ".workbuddy-host-heartbeat.json";
 /** Current on-disk heartbeat format; readers reject others. */
 declare const HEARTBEAT_FORMAT_VERSION = 1;
@@ -2775,6 +2808,278 @@ declare function processStartTimeMs(pid: number): number | undefined;
  * (e.g. unsupported platform) the check degrades to plain PID liveness.
  */
 declare function isHeartbeatProcessAlive(heartbeat: WorkBuddyHostHeartbeat): boolean;
+//#endregion
+//#region src/checkin.d.ts
+/** What one attempt produced. */
+interface WorkBuddyCheckInResult {
+  variantId: string;
+  /** The UTC+8 day the attempt belongs to, `YYYY-MM-DD`. */
+  date: string;
+  /** When the attempt ran, epoch ms. */
+  timestamp: number;
+  /**
+   * `claimed` a benefit was granted; `already-claimed` the upstream says today
+   * is spent; `no-campaign` there is no campaign to claim; `error` the answer
+   * was unreadable or the request failed.
+   *
+   * `already-claimed` is deliberately distinct from `claimed`: both mean "today
+   * is settled", but only the first is worth telling the user that the plugin
+   * did not just earn them anything.
+   */
+  status: 'claimed' | 'already-claimed' | 'no-campaign' | 'error';
+  /** Credits granted, when the answer stated a figure. */
+  amount?: number;
+  /** The upstream's own message, or a short description of the failure. */
+  message?: string;
+}
+/** Constructor dependencies; `fetch` is injectable so tests never reach the network. */
+interface WorkBuddyCheckInOptions {
+  fetch?: typeof fetch;
+  timeoutMs?: number;
+  /** Clock, injectable so the day boundary is testable. */
+  now?: () => number;
+}
+/** The UTC+8 calendar day a moment belongs to, as `YYYY-MM-DD`. */
+declare function utc8DateString(nowMs: number): string;
+/**
+ * Milliseconds until the next occurrence of a minute-of-day in UTC+8.
+ *
+ * Five seconds past the configured minute, so the request lands after the
+ * upstream has flipped the day over rather than on the boundary itself — a
+ * check-in fired at exactly 10:00:00 can still be answered as yesterday's.
+ */
+declare function msUntilCheckIn(minuteOfDay: number, nowMs: number): number;
+/**
+ * Whether today's configured moment has passed in UTC+8.
+ *
+ * The catch-up sweep's gate: a host started at 09:00 must not claim a check-in
+ * the user scheduled for 10:00, because the plugin would then have checked in
+ * at a time the user explicitly did not choose.
+ */
+declare function isPastCheckInTime(minuteOfDay: number, nowMs: number): boolean;
+/** The default moment: 600 = 10:00 UTC+8. */
+declare const DEFAULT_CHECK_IN_MINUTE = 600;
+/** Clamp any stored or typed value onto a real minute of the day. */
+declare function normalizeCheckInMinute(value: unknown): number;
+/**
+ * The daily check-in.
+ *
+ * One instance serves both variants: the credential carries the region, so the
+ * request needs nothing else that varies per product.
+ */
+declare class WorkBuddyCheckIn {
+  private readonly fetchImpl;
+  private readonly timeoutMs;
+  private readonly now;
+  constructor(options?: WorkBuddyCheckInOptions);
+  /**
+   * Claim one product's daily benefit.
+   *
+   * Never throws: every failure becomes an `error` result carrying the reason,
+   * because the caller is a timer with nowhere to report an exception, and a
+   * dropped check-in must be visible in the log rather than silent.
+   */
+  checkIn(variantId: string, credential: WorkBuddyCredential | undefined, signal?: AbortSignal): Promise<WorkBuddyCheckInResult>;
+}
+//#endregion
+//#region src/checkin-scheduler.d.ts
+/** Basename of the check-in log inside the plugin's state directory. */
+declare const WORKBUDDY_CHECKIN_FILENAME = ".workbuddy-checkin.json";
+/** State-file path for one variant's log, inside the plugin's state directory. */
+declare function workbuddyCheckInPath(filename?: string): string;
+/** One account a variant may claim for. */
+interface WorkBuddyCheckInAccount {
+  /** Pool identity (`uid:enterpriseId`); the key this account's record is stored under. */
+  id: string;
+  /** Display name, so a log row says which account it was. */
+  name: string;
+}
+/** One logged attempt, as the card renders it. */
+interface WorkBuddyCheckInLogRow {
+  /** Stable id, so a re-render does not duplicate a row. */
+  id: string;
+  date: string;
+  timestamp: number;
+  status: WorkBuddyCheckInResult['status'];
+  amount?: number;
+  message?: string;
+  /** Which account the attempt was for, as the card names it. */
+  account?: string;
+}
+/** What the store remembers for one account of one variant. */
+interface WorkBuddyCheckInAccountState {
+  /** The last UTC+8 day an attempt for THIS ACCOUNT settled, `YYYY-MM-DD`. */
+  lastDate: string;
+  /** When that attempt ran, epoch ms. */
+  lastAt: number;
+  status: WorkBuddyCheckInResult['status'];
+  amount?: number;
+  message?: string;
+}
+/** One variant's record: its per-account state and its shared timeline. */
+interface WorkBuddyCheckInVariantState {
+  /** Keyed by pool identity; an account absent here has never been attempted. */
+  accounts: Record<string, WorkBuddyCheckInAccountState>;
+  /** Most recent first, across every account of this variant. */
+  logs: readonly WorkBuddyCheckInLogRow[];
+}
+/**
+ * The check-in record: one JSON document holding every variant's state.
+ *
+ * One file rather than one per product, because the two products' check-ins are
+ * driven by the same timer and read by the same card; two files would only add
+ * a second failure mode (one readable, one not) for no separation the user
+ * asked for. The document is per-variant *inside*, and per-account inside that,
+ * so neither the two products' histories nor two accounts' settle flags ever
+ * mix.
+ */
+declare class WorkBuddyCheckInStore {
+  private readonly path;
+  constructor(path?: string);
+  /** Resolved path, for the CLI and tests. */
+  filePath(): string;
+  /**
+   * Every variant's record, normalized to shapes callers may trust.
+   *
+   * Deliberately forgiving: a hand-edited or truncated file loses the entries
+   * that do not parse rather than the whole document, because the cost of a
+   * dropped record is one redundant check-in — the upstream answers
+   * "already-claimed" — while the cost of an all-or-nothing read is a day's
+   * benefit spent claiming again from scratch.
+   */
+  private load;
+  /** One variant's record, when it has one. */
+  read(variantId: string): WorkBuddyCheckInVariantState | undefined;
+  /** One account's state within a variant, when it has been attempted. */
+  readAccount(variantId: string, accountId: string): WorkBuddyCheckInAccountState | undefined;
+  /**
+   * Whether one account's day is already SETTLED — claimed, already taken, or
+   * not on offer.
+   *
+   * An `error` is deliberately not settled: the next sweep must retry, or one
+   * transient failure would cost that account the whole day's benefit.
+   */
+  settledToday(variantId: string, accountId: string, session: string): boolean;
+  /**
+   * Record one attempt for one account.
+   *
+   * @param session - the day this run belongs to, which is NOT the attempt's own
+   *   date when a catch-up sweep settles a run scheduled for a moment that has
+   *   since passed. Storing the attempt's date would make the next sweep read
+   *   "not settled yet" for the day it just settled.
+   * @param accountName - what the row says about which account, when the pool
+   *   had a name for it.
+   */
+  write(variantId: string, accountId: string, accountName: string, result: WorkBuddyCheckInResult, session: string): void;
+  /** Drop one variant's timeline, keeping every account's settle flag. */
+  clearLogs(variantId: string): void;
+}
+/** One variant's check-in, as the scheduler needs it. */
+interface WorkBuddyCheckInTarget {
+  variantId: string;
+  /**
+   * Make the pool answerable, before {@link accounts} is asked.
+   *
+   * The sweep calls this once per variant per run. It exists because the pool
+   * is not necessarily populated yet when the timer fires: a host that has just
+   * started (or one whose desktop sign-in was only just adopted) has an empty
+   * pool until something captures it, and `accounts()` is a plain synchronous
+   * read that cannot do that itself.
+   *
+   * This is not theoretical. A catch-up sweep runs at startup, and at startup
+   * the pool can be empty — so without this hook the very first check-in of a
+   * fresh host would find nobody to claim for and quietly record nothing, which
+   * is the day's benefit lost until the next start. The card's manual refresh
+   * performs the same preparation for the same reason.
+   *
+   * A rejection is logged as that variant's failure and does not stop the other
+   * variant: a pool that cannot be prepared may still be usable, and the
+   * per-account attempt reports whatever is wrong with it anyway.
+   */
+  prepare?: () => Promise<void>;
+  /**
+   * The accounts to claim for, in the order they should be tried.
+   *
+   * Read at each sweep rather than captured, so an account added — or signed in
+   * through the desktop app — while the host is running is claimed for on the
+   * very next run instead of after a restart.
+   */
+  accounts: () => readonly WorkBuddyCheckInAccount[];
+  /** Claim today's benefit for ONE account of this variant. */
+  checkIn: (session: string, account: WorkBuddyCheckInAccount, signal?: AbortSignal) => Promise<WorkBuddyCheckInResult>;
+  /** Whether the user has switched automatic check-in on for this variant. */
+  enabled: () => boolean;
+  /** The moment to check in, as minutes past midnight UTC+8. */
+  minuteOfDay: () => number;
+  /** Called after a claim landed, so the caller can re-read credit. */
+  onClaimed?: () => void;
+}
+/** Constructor dependencies. */
+interface WorkBuddyCheckInSchedulerOptions {
+  targets: readonly WorkBuddyCheckInTarget[];
+  store?: WorkBuddyCheckInStore;
+  /** Clock, injectable so the schedule is testable without waiting. */
+  now?: () => number;
+  /** Where a settle is reported; defaults to nothing. */
+  onResult?: (result: WorkBuddyCheckInResult) => void;
+}
+/**
+ * Runs each variant's check-in once a day, for every account in its pool, and
+ * catches up a day the host was not running for.
+ *
+ * The catch-up rule is the reason this is not a bare `setTimeout`: a host that
+ * is only started at 20:00 would otherwise never check in at all, because the
+ * scheduled moment passed while it was down. A sweep therefore runs once at
+ * startup, and it runs a variant only when the configured moment has ALREADY
+ * passed and today is not settled — a host started before 10:00 waits for its
+ * timer, exactly as the user asked it to. The per-account gate is the finer
+ * one: a sweep claims for the accounts that are not settled and leaves the rest
+ * alone, so a mid-day restart costs nothing and an account added in the
+ * afternoon still gets that day's benefit.
+ */
+declare class WorkBuddyCheckInScheduler {
+  private readonly targets;
+  private readonly store;
+  private readonly now;
+  private readonly onResult;
+  private readonly timers;
+  /** Variants with a run in flight, so a timer and a sweep cannot both spend. */
+  private readonly inFlight;
+  private nextRuns;
+  private stopped;
+  constructor(options: WorkBuddyCheckInSchedulerOptions);
+  /** Start the timers, after one catch-up sweep. */
+  start(): void;
+  /** Stop every timer; a run already in flight is left to finish. */
+  dispose(): void;
+  /**
+   * Re-arm every timer from the current configuration.
+   *
+   * Called after a settings write, so a moment the user has just changed takes
+   * effect now rather than at the next firing of the old one.
+   */
+  rearm(): void;
+  /** When this variant's next run is due, epoch ms, when one is armed. */
+  nextRunAt(variantId: string): number | undefined;
+  /**
+   * Sweep every variant (or one), claiming for each variant's unsettled
+   * accounts.
+   *
+   * @param catchUp - true for the startup sweep, which also runs a variant whose
+   *   scheduled moment has passed; false for a timer firing, which runs whatever
+   *   it is told to.
+   * @param only - restrict the sweep to one variant.
+   */
+  sweep(catchUp: boolean, only?: string): Promise<void>;
+  /**
+   * One account's attempt, reported as a result whatever happens.
+   *
+   * A throwing target must not stop the accounts behind it in the same pool,
+   * and the failure is worth a log row: "nothing happened" is otherwise
+   * indistinguishable from "it never ran".
+   */
+  private attempt;
+}
 //#endregion
 //#region src/index.d.ts
 /** Stable Cordis plugin name. */
@@ -2836,6 +3141,44 @@ interface WorkBuddyConfiguredFields {
   probeConsent?: boolean;
   /** Use the largest context window the international catalog explicitly offers. */
   useMaximumContextWindow?: boolean;
+  /**
+   * Whether the CN product's daily benefit is claimed automatically.
+   *
+   * Off by default, like every other thing this plugin does on the user's
+   * behalf without being asked: the request spends a real (if free) upstream
+   * call against their account, and a plugin that starts talking to a benefit
+   * endpoint the moment it is installed is a surprise. The card's check-in
+   * section is where it gets switched on.
+   */
+  autoCheckIn?: boolean;
+  /** The same switch for the international product. */
+  autoCheckInAI?: boolean;
+  /**
+   * When to claim, as minutes past midnight UTC+8 (600 = 10:00).
+   *
+   * UTC+8 for both products because the daily reset is the upstream's, not the
+   * machine's — see {@link normalizeCheckInMinute}.
+   */
+  checkInMinute?: number;
+  /** The same moment for the international product. */
+  checkInMinuteAI?: number;
+  /**
+   * Which account the model filter is edited for, per product.
+   *
+   * Empty (the default) means "follow the primary account" — the only behaviour
+   * every earlier build had, and the reason this is a preference rather than a
+   * per-card local state: the DSH model picker has ONE list per provider, so
+   * which account's filter is in force is a product-wide decision that has to
+   * survive a reload and be the same one the host filters by.
+   *
+   * A pool identity (`uid:enterpriseId`), not a token. An account that has since
+   * been removed falls back to the primary rule rather than hiding every model:
+   * a preference naming an account nobody has any more must not be able to empty
+   * the picker.
+   */
+  visibilityAccount?: string;
+  /** The same choice for the international product. */
+  visibilityAccountAI?: string;
 }
 /** Plugin configuration. */
 type Config = WorkBuddyPreferenceConfig & WorkBuddyConfiguredFields;
@@ -2905,4 +3248,4 @@ declare module '@deepseek-ai/cordis' {
  */
 declare function apply(ctx: Context, config: Config): void;
 //#endregion
-export { AI_VARIANT, type AppVersionInfo, CN_APP_VERSION_FILENAME, CN_VARIANT, type ChatIdentity, Config, FALLBACK_CN_APP_VERSION, FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, PROBE_EFFORT_CANDIDATES, PROFILE_ENTRY_ID, type ProbeAttempt, type ProbeOutcome, type ProbeSender, type ResolveChatIdentityOptions, type UpstreamErrorKind, WORKBUDDY_ACCOUNTS_FILENAME, WORKBUDDY_AI_SETTINGS_NS, WORKBUDDY_APP_VERSION_FILENAME, WORKBUDDY_AUTH_FILENAME, WORKBUDDY_AUTH_FILE_ENV, WORKBUDDY_CATALOG_FILENAME, WORKBUDDY_HOST_HEARTBEAT_FILENAME, WORKBUDDY_PROBE_FILENAME, WORKBUDDY_PROVIDER, WORKBUDDY_SETTINGS_NS, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, WORKBUDDY_VARIANTS, WORKBUDDY_VISIBILITY_FILENAME, type WorkBuddyAccount, type WorkBuddyAccountInput, type WorkBuddyAccountOrigin, WorkBuddyAccountPool, type WorkBuddyAccountPoolOptions, type WorkBuddyAccountRouteOptions, WorkBuddyAccountService, type WorkBuddyAccountServiceOptions, type WorkBuddyAccountSnapshot, type WorkBuddyAdapter, type WorkBuddyAppVersionSource, type WorkBuddyAuthStatus, WorkBuddyCatalog, type WorkBuddyCatalogFetch, WorkBuddyCatalogStore, type WorkBuddyChatResult, type WorkBuddyChatSender, type WorkBuddyCooldown, type WorkBuddyCooldownReason, WorkBuddyCredentialStore, type WorkBuddyCredits, type WorkBuddyEffort, type WorkBuddyHostHeartbeat, type WorkBuddyModelBilling, type WorkBuddyModelInfo, type WorkBuddyModelReasoning, type WorkBuddyProbeRecord, WorkBuddyProbeService, type WorkBuddyProbeStatus, WorkBuddyProbeStore, type WorkBuddyProbeValidation, type WorkBuddyPromotion, type WorkBuddyQrChallenge, WorkBuddyQrLogin, type WorkBuddyQrLoginOptions, type WorkBuddyQrPoll, type WorkBuddyRefreshOutcome, WorkBuddyRotation, type WorkBuddyRotationOptions, type WorkBuddyRotationOutcome, type WorkBuddyShim, type WorkBuddyUpsertResult, WorkBuddyUpstreamClient, type WorkBuddyUpstreamModel, type WorkBuddyVariant, WorkBuddyVisibilityStore, type WorkBuddyWebAccount, accountIdOf, accountsJson, appUserAgent, apply, challengeTag, chatBaseForDomain, chatBaseForRegion, chatUserAgent, classifyUpstreamError, clearHostHeartbeat, cooldownDurationMs, cooldownReasonFor, createStoreSender, createWorkBuddyAdapter, createWorkBuddyShim, credentialAccountId, credentialOf, defaultDesktopAuthCandidates, defaultDesktopAuthPath, desktopAuthCandidatesFor, fallbackChatIdentity, fingerprintModel, formatAccounts, inject, installedAppVersion, isAccountScoped, isHeartbeatProcessAlive, modelWithCurrentPromotion, name, normalizeCredits, originForRegion, parseAccountAction, parseModelCatalog, parseRetryAfter, parseWorkBuddyAuth, prepareChatBody, prepareInternationalChatBody, probeModel, processStartTimeMs, randomSentinel, readBundleVersion, readCliVersion, readHostHeartbeat, regionOf, registerWorkBuddyAccountRoute, resolveAppVersion, resolveChatIdentity, validAppVersion, validCliVersion, variantFor, visibilityAccountOf, workBuddyAccountHandler, workbuddyAccountsPath, workbuddyCatalogPath, workbuddyHostHeartbeatPath, workbuddyOwnAuthPath, workbuddyProbePath, workbuddyVisibilityPath };
+export { AI_VARIANT, type AppVersionInfo, CN_APP_VERSION_FILENAME, CN_VARIANT, type ChatIdentity, Config, DEFAULT_CHECK_IN_MINUTE, FALLBACK_CN_APP_VERSION, FALLBACK_WORKBUDDY_AI_MODELS, FALLBACK_WORKBUDDY_MODELS, PROBE_EFFORT_CANDIDATES, PROFILE_ENTRY_ID, type ProbeAttempt, type ProbeOutcome, type ProbeSender, type ResolveChatIdentityOptions, type UpstreamErrorKind, WORKBUDDY_ACCOUNTS_FILENAME, WORKBUDDY_AI_SETTINGS_NS, WORKBUDDY_APP_VERSION_FILENAME, WORKBUDDY_AUTH_FILENAME, WORKBUDDY_AUTH_FILE_ENV, WORKBUDDY_CATALOG_FILENAME, WORKBUDDY_CHECKIN_FILENAME, WORKBUDDY_HOST_HEARTBEAT_FILENAME, WORKBUDDY_PROBE_FILENAME, WORKBUDDY_PROVIDER, WORKBUDDY_SETTINGS_NS, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, WORKBUDDY_VARIANTS, WORKBUDDY_VISIBILITY_FILENAME, type WorkBuddyAccount, type WorkBuddyAccountInput, type WorkBuddyAccountOrigin, WorkBuddyAccountPool, type WorkBuddyAccountPoolOptions, type WorkBuddyAccountRouteOptions, WorkBuddyAccountService, type WorkBuddyAccountServiceOptions, type WorkBuddyAccountSnapshot, type WorkBuddyAdapter, type WorkBuddyAppVersionSource, type WorkBuddyAuthStatus, WorkBuddyCatalog, type WorkBuddyCatalogFetch, WorkBuddyCatalogStore, type WorkBuddyChatResult, type WorkBuddyChatSender, WorkBuddyCheckIn, type WorkBuddyCheckInAccount, type WorkBuddyCheckInAccountState, type WorkBuddyCheckInLogRow, type WorkBuddyCheckInResult, WorkBuddyCheckInScheduler, WorkBuddyCheckInStore, type WorkBuddyCheckInVariantState, type WorkBuddyCooldown, type WorkBuddyCooldownReason, WorkBuddyCredentialStore, type WorkBuddyCredits, type WorkBuddyEffort, type WorkBuddyHostHeartbeat, type WorkBuddyModelBilling, type WorkBuddyModelInfo, type WorkBuddyModelReasoning, type WorkBuddyProbeRecord, WorkBuddyProbeService, type WorkBuddyProbeStatus, WorkBuddyProbeStore, type WorkBuddyProbeValidation, type WorkBuddyPromotion, type WorkBuddyQrChallenge, WorkBuddyQrLogin, type WorkBuddyQrLoginOptions, type WorkBuddyQrPoll, type WorkBuddyRefreshOutcome, WorkBuddyRotation, type WorkBuddyRotationOptions, type WorkBuddyRotationOutcome, type WorkBuddyShim, type WorkBuddyUpsertResult, WorkBuddyUpstreamClient, type WorkBuddyUpstreamModel, type WorkBuddyVariant, WorkBuddyVisibilityStore, type WorkBuddyWebAccount, accountDisplayName, accountIdOf, accountsJson, appUserAgent, apply, challengeTag, chatBaseForDomain, chatBaseForRegion, chatUserAgent, classifyUpstreamError, clearHostHeartbeat, cooldownDurationMs, cooldownReasonFor, createStoreSender, createWorkBuddyAdapter, createWorkBuddyShim, credentialAccountId, credentialOf, defaultDesktopAuthCandidates, defaultDesktopAuthPath, desktopAuthCandidatesFor, fallbackChatIdentity, fingerprintModel, formatAccounts, inject, installedAppVersion, isAccountScoped, isHeartbeatProcessAlive, isPastCheckInTime, modelWithCurrentPromotion, msUntilCheckIn, name, normalizeCheckInMinute, normalizeCredits, originForRegion, parseAccountAction, parseModelCatalog, parseRetryAfter, parseWorkBuddyAuth, prepareChatBody, prepareInternationalChatBody, probeModel, processStartTimeMs, randomSentinel, readBundleVersion, readCliVersion, readHostHeartbeat, regionOf, registerWorkBuddyAccountRoute, resolveAppVersion, resolveChatIdentity, utc8DateString, validAppVersion, validCliVersion, variantFor, visibilityAccountOf, workBuddyAccountHandler, workbuddyAccountsPath, workbuddyCatalogPath, workbuddyCheckInPath, workbuddyHostHeartbeatPath, workbuddyOwnAuthPath, workbuddyProbePath, workbuddyVisibilityPath };

@@ -1,5 +1,7 @@
 /** Plugin-card copy registered under the settings.workbuddy locale namespace. */
 
+import { HOST_REASON_EN, HOST_REASON_ZH } from './host-reason-copy.ts'
+
 /**
  * The translation function every browser-side component receives.
  *
@@ -106,7 +108,7 @@ export const en = {
   accountEmpty: 'No accounts yet. Sign in to the desktop app, or add one by QR.',
   accountEmptyHint: 'Sign in once — the desktop app\'s session is picked up automatically — or add an account below.',
   accountUnavailable: 'The host did not report its account pool. Update the plugin, or restart DSH.',
-  navWorkBuddy: 'DSH-WorkBuddy',
+  navWorkBuddy: 'WorkBuddy',
   accountPageTitle: 'Accounts and credit',
   accountAddCn: 'Add WorkBuddy account',
   accountAddPickHint: 'Which product is this account for?',
@@ -248,6 +250,40 @@ export const en = {
   saveBarSaving: 'Saving…',
   saveBarDiscard: 'Discard',
   saveBarSaved: 'Saved',
+  // The daily check-in section.
+  checkInHeading: 'Daily check-in',
+  checkInLabel: '{product} automatic check-in',
+  checkInHint: 'Claims the daily benefit once a day. Off by default — switching it on is what authorizes the plugin to send that request.',
+  checkInMinuteLabel: 'Check in at',
+  checkInMinuteHint: 'Beijing time (UTC+8), the same clock the daily reset runs on. A host that starts after this moment catches up; one that starts before it waits.',
+  checkInNow: 'Check in now',
+  checkInRunning: 'Checking in…',
+  checkInNext: 'Next run {time}',
+  checkInNextNone: 'Nothing scheduled',
+  checkInLastSettled: 'Last settled {date}',
+  checkInNever: 'No check-in recorded yet.',
+  checkInClearLogs: 'Clear log',
+  checkInLogsHeading: 'Recent attempts',
+  checkInLogEmpty: 'Nothing recorded yet.',
+  checkInStatusClaimed: 'Claimed {amount}',
+  checkInStatusClaimedNoAmount: 'Claimed',
+  checkInStatusAlready: 'Already claimed today',
+  checkInStatusNoCampaign: 'No campaign running',
+  checkInStatusError: 'Failed',
+  checkInAccountsHeading: 'Accounts',
+  checkInSettled: 'Done today',
+  checkInPending: 'Not yet today',
+  checkInAccountNever: 'never',
+  checkInAccountLast: 'last {time}',
+  // The model filter's account selector.
+  filterAccountLabel: 'Account',
+  filterAccountHint: 'The model filter below is stored per account and the model picker follows the chosen one. Switching accounts switches the whole list.',
+  filterAccountPrimary: '{name} (current sign-in)',
+  filterAccountFollow: 'Follow the account in use',
+  // The host's own refusal sentences, shared with the dashboard's namespace:
+  // both surfaces draw them, so the copy lives in one table (see
+  // `host-reason-copy.ts`) and each dictionary spreads it in.
+  ...HOST_REASON_EN,
 } as const
 
 export type WorkBuddySettingsKey = keyof typeof en
@@ -349,7 +385,7 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   accountEmpty: '还没有账号。可在桌面 App 登录，或在此扫码添加。',
   accountEmptyHint: '先登录一次即可：桌面 App 的登录态会被自动识别，也可以在下面手动添加账号。',
   accountUnavailable: '宿主未返回账号列表。请更新插件或重启 DSH。',
-  navWorkBuddy: 'DSH-WorkBuddy',
+  navWorkBuddy: 'WorkBuddy',
   accountPageTitle: '账号与积分',
   accountAddCn: '添加 WorkBuddy 账号',
   accountAddPickHint: '这个账号属于哪一版？',
@@ -472,4 +508,37 @@ export const zh: Record<WorkBuddySettingsKey, string> = {
   saveBarSaving: '保存中…',
   saveBarDiscard: '放弃',
   saveBarSaved: '已保存',
+  // 每日自动签到分区。
+  checkInHeading: '每日签到',
+  checkInLabel: '{product} 自动签到',
+  checkInHint: '每天自动领取一次每日福利。默认关闭——打开它才是授权插件发出这个请求。',
+  checkInMinuteLabel: '签到时刻',
+  checkInMinuteHint: '北京时间（UTC+8），与每日重置同一套时钟。启动时刻已过会补签；尚未到点则等待。',
+  checkInNow: '立即签到',
+  checkInRunning: '签到中…',
+  checkInNext: '下次运行 {time}',
+  checkInNextNone: '尚未安排',
+  checkInLastSettled: '上次结算 {date}',
+  checkInNever: '还没有签到记录。',
+  checkInClearLogs: '清空日志',
+  checkInLogsHeading: '最近记录',
+  checkInLogEmpty: '还没有记录。',
+  checkInStatusClaimed: '已领取 {amount}',
+  checkInStatusClaimedNoAmount: '已领取',
+  checkInStatusAlready: '今天已签到',
+  checkInStatusNoCampaign: '当前没有活动',
+  checkInStatusError: '失败',
+  checkInAccountsHeading: '账号',
+  checkInSettled: '今日已完成',
+  checkInPending: '今日未完成',
+  checkInAccountNever: '从未',
+  checkInAccountLast: '上次 {time}',
+  // 模型筛选的账号选择器。
+  filterAccountLabel: '账号',
+  filterAccountHint: '下方的模型筛选按账号分别保存，模型选择器跟随所选账号。切换账号即切换整份名单。',
+  filterAccountPrimary: '{name}（当前登录）',
+  filterAccountFollow: '跟随当前使用的账号',
+  // 宿主自己的拒绝语。与仪表盘共用一份表：两边都要显示这些句子，所以文案
+  // 只有一处（见 `host-reason-copy.ts`），各自展开进来。
+  ...HOST_REASON_ZH,
 }

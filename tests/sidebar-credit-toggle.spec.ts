@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -7,6 +7,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import { FakeSettingsService } from './fake-settings.ts'
 import { AI_VARIANT, CN_VARIANT } from '../src/variants.ts'
+import { workbuddyConfigDir } from '../src/paths.ts'
 import * as WorkBuddy from '../src/index.ts'
 
 /**
@@ -250,5 +251,167 @@ describe('the sidebar credit card switch', () => {
     const refused = await post(CN_VARIANT.probePath, { action: 'set-sidebar-credit-visible', enabled: false }, 'not-the-key')
     expect(refused.status).toBe(403)
     expect((await get(CN_VARIANT.statusPath))['sidebarCreditVisible']).toBe(true)
+  })
+})
+
+/**
+ * The model filter's account selector, through the REAL routes.
+ *
+ * This is the one test that covers the round trip the feature actually is: the
+ * page asks one product's probe route to point the model filter at a pool
+ * account, the host stores that as a config field, and the status document the
+ * card renders reports the account the filter now applies for — with the list of
+ * accounts to choose from. Every unit in between is covered elsewhere; what is
+ * only provable here is that the route, the config field and the getter agree.
+ */
+describe('the model filter account selector', () => {
+  /**
+   * Boot with TWO accounts in the CN pool, so a choice has somewhere to go.
+   *
+   * The second account is added through the pool file rather than the desktop
+   * credential, which is how a QR sign-in looks: the pool is where a selector's
+   * options come from, and the desktop app can only ever contribute one.
+   */
+  async function bootWithTwoAccounts(): Promise<{
+    get: (path: string) => Promise<Record<string, unknown>>
+    post: (path: string, body: unknown, key: string) => Promise<{ status: number, body: Record<string, unknown> }>
+  }> {
+    const root = await tempDir()
+    const cnFile = join(root, 'cn.info')
+    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-1'))
+    vi.stubEnv('DSH_HOME', root)
+    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
+    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
+    await mkdir(workbuddyConfigDir(), { recursive: true })
+    await writeFile(join(workbuddyConfigDir(), '.workbuddy-accounts.json'), JSON.stringify({
+      version: 1,
+      accounts: [
+        {
+          id: 'uid-1:ent-1', uid: 'uid-1', enterpriseId: 'ent-1', domain: 'copilot.tencent.com',
+          accessToken: 'at-1', refreshToken: 'rt-1', expiresAtMs: Date.now() + 3_600_000,
+          origin: 'desktop', enabled: true, lastUsedAtMs: 0,
+        },
+        {
+          id: 'uid-2:ent-2', uid: 'uid-2', enterpriseId: 'ent-2', nickname: 'Second', domain: 'copilot.tencent.com',
+          accessToken: 'at-2', refreshToken: 'rt-2', expiresAtMs: Date.now() + 3_600_000,
+          origin: 'qr', enabled: true, lastUsedAtMs: 0,
+        },
+      ],
+    }))
+    const realFetch = globalThis.fetch
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL, init?: RequestInit) => {
+      if (String(url).startsWith('http://127.0.0.1')) return realFetch(url, init)
+      throw new Error('offline in tests')
+    }))
+
+    const ctx = new Context()
+    context = ctx
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(FakeSettingsService)
+    await ctx.plugin(FakeWebServer)
+    const settings = FakeSettingsService.current as FakeSettingsService
+    settings.declareEntry(WorkBuddy.PROFILE_ENTRY_ID, {}, WorkBuddy.Config)
+    const fiber = ctx.plugin(WorkBuddy, {})
+    await fiber
+    settings.bindFiber(WorkBuddy.PROFILE_ENTRY_ID, fiber.config)
+    await vi.waitFor(() => {
+      expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('workbuddy')
+    })
+    return serve()
+  }
+
+  it('offers the pool, stores the choice, and reports it back', async () => {
+    const { get, post } = await bootWithTwoAccounts()
+    const before = await get(CN_VARIANT.statusPath)
+    const visibility = before['visibility'] as {
+      account?: string
+      choices?: { id: string, name: string, active: boolean }[]
+      chosen?: boolean
+    }
+    const key = before['probeKey'] as string
+
+    // Both accounts are offered, and the one in effect is marked. Without this
+    // list the page would have no controls at all, so its presence is the
+    // feature's capability signal.
+    expect(visibility.choices?.map(choice => choice.id)).toEqual(['uid-1:ent-1', 'uid-2:ent-2'])
+    expect(visibility.choices?.find(choice => choice.active)?.id).toBe('uid-1:ent-1')
+    // The country account is named by its nickname, the other by a short uid.
+    expect(visibility.choices?.map(choice => choice.name)).toEqual(['uid-1', 'Second'])
+    // Nothing stored yet, so the primary rule is what answered.
+    expect(visibility.account).toBe('uid-1:ent-1')
+    expect(visibility.chosen).toBe(false)
+
+    expect(await post(CN_VARIANT.probePath, { action: 'set-visibility-account', account: 'uid-2:ent-2' }, key))
+      .toMatchObject({ status: 200, body: { state: 'updated' } })
+    // The settings field itself moved, which is what survives a restart.
+    expect(FakeSettingsService.current?.valueOf(WorkBuddy.PROFILE_ENTRY_ID, 'visibilityAccount')).toBe('uid-2:ent-2')
+
+    const after = await get(CN_VARIANT.statusPath)
+    const next = after['visibility'] as { account?: string, chosen?: boolean, disabled?: string[] }
+    expect(next.account).toBe('uid-2:ent-2')
+    expect(next.chosen).toBe(true)
+    // The hidden list served is the CHOSEN account's, not the signed-in one's:
+    // the card's checkboxes and the DSH picker must read the same bucket.
+    expect(next.disabled).toEqual([])
+  })
+
+  it('refuses an account that is not in this product\'s pool', async () => {
+    const { get, post } = await bootWithTwoAccounts()
+    const key = (await get(CN_VARIANT.statusPath))['probeKey'] as string
+
+    // Stored would be a preference nothing could honour: the read path falls
+    // back to the primary account, which the user would experience as "the
+    // selector does not stick".
+    const refused = await post(CN_VARIANT.probePath, { action: 'set-visibility-account', account: 'uid-nope:ent' }, key)
+    expect(refused.status).toBe(200)
+    expect(refused.body['state']).toBe('failed')
+    expect(FakeSettingsService.current?.valueOf(WorkBuddy.PROFILE_ENTRY_ID, 'visibilityAccount')).toBe('')
+
+    // The other product's pool is a separate pool, so its ids are not choices
+    // here either — the routes are per variant and the ids do not carry over.
+    const still = (await get(CN_VARIANT.statusPath))['visibility'] as { chosen?: boolean }
+    expect(still.chosen).toBe(false)
+  })
+
+  it('returns to the primary rule when asked with an empty account', async () => {
+    const { get, post } = await bootWithTwoAccounts()
+    const key = (await get(CN_VARIANT.statusPath))['probeKey'] as string
+
+    expect(await post(CN_VARIANT.probePath, { action: 'set-visibility-account', account: 'uid-2:ent-2' }, key))
+      .toMatchObject({ status: 200, body: { state: 'updated' } })
+    expect(((await get(CN_VARIANT.statusPath))['visibility'] as { account?: string }).account).toBe('uid-2:ent-2')
+
+    // Empty is meaningful rather than malformed: it is how the card restores the
+    // default, and it is the state every earlier build was in.
+    expect(await post(CN_VARIANT.probePath, { action: 'set-visibility-account', account: '' }, key))
+      .toMatchObject({ status: 200, body: { state: 'updated' } })
+    const back = (await get(CN_VARIANT.statusPath))['visibility'] as { account?: string, chosen?: boolean }
+    expect(back.account).toBe('uid-1:ent-1')
+    expect(back.chosen).toBe(false)
+  })
+
+  it('falls back to the primary account when the choice left the pool', async () => {
+    const { get, post } = await bootWithTwoAccounts()
+    const key = (await get(CN_VARIANT.statusPath))['probeKey'] as string
+    expect(await post(CN_VARIANT.probePath, { action: 'set-visibility-account', account: 'uid-2:ent-2' }, key))
+      .toMatchObject({ status: 200, body: { state: 'updated' } })
+
+    // The account is removed from the pool while the preference still names it —
+    // the state a user reaches by deleting an account they had selected. The
+    // filter must NOT keep answering for a departed account: its bucket would
+    // hide models on behalf of an account the picker cannot even name.
+    await post(CN_VARIANT.accountPath, { action: 'remove', id: 'uid-2:ent-2' }, key)
+    const after = await get(CN_VARIANT.statusPath)
+    const section = after['visibility'] as {
+      account?: string
+      chosen?: boolean
+      choices?: { id: string }[]
+    }
+    expect(section.account).toBe('uid-1:ent-1')
+    expect(section.chosen).toBe(false)
+    expect(section.choices?.map(choice => choice.id)).toEqual(['uid-1:ent-1'])
+    // The stale preference is still ON DISK — the read falls back rather than
+    // rewriting the user's config, so re-adding the account restores the choice.
+    expect(FakeSettingsService.current?.valueOf(WorkBuddy.PROFILE_ENTRY_ID, 'visibilityAccount')).toBe('uid-2:ent-2')
   })
 })

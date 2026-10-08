@@ -11,7 +11,7 @@
  */
 
 import type { WorkBuddyAccount, WorkBuddyAccountPool, WorkBuddyUpsertResult } from './account-pool.ts'
-import { accountIdOf, credentialAccountId, credentialOf } from './account-pool.ts'
+import { accountDisplayName, accountIdOf, credentialAccountId, credentialOf } from './account-pool.ts'
 import { profileFromToken } from './account-token.ts'
 import type { WorkBuddyCredential, WorkBuddyCredentialStore } from './auth.ts'
 import type { WorkBuddyQrLogin } from './qr-login.ts'
@@ -277,6 +277,38 @@ export class WorkBuddyAccountService {
   }
 
   /**
+   * Every account this variant may send a request as, in pool order.
+   *
+   * The whole pool, deliberately not only the *available* ones: an account
+   * benched for an hour is still entitled to today's benefit, and deciding
+   * "usable right now" is the caller's business — the check-in asks only "who
+   * does this product have". A disabled account is left out, because the
+   * enable switch is the user's own statement about whether the plugin may
+   * spend this account at all, and the check-in must honour it like every other
+   * request path does.
+   */
+  claimableAccounts(): readonly WorkBuddyAccount[] {
+    return this.pool.list().filter(account => account.enabled && account.sessionDead !== true)
+  }
+
+  /**
+   * One account's credential by identity, refreshed if it is at or near expiry.
+   *
+   * The per-account sibling of {@link primaryCredential}, for callers that must
+   * act as a NAMED account rather than as whichever one is primary: the daily
+   * check-in claims once per pool member, so "the account this is for" is the
+   * whole point and cannot be resolved by the primary rule. Returning undefined
+   * means the identity is no longer in the pool (removed while a timer was
+   * pending), which is a skip rather than a failure.
+   */
+  async credentialFor(id: string): Promise<WorkBuddyCredential | undefined> {
+    const account = this.pool.get(id)
+    if (account === undefined) return undefined
+    const refreshed = await this.refreshIfStale(account)
+    return credentialOf(refreshed)
+  }
+
+  /**
    * Refresh an account whose access token is at or near expiry.
    *
    * The pool's own copy is the one that gets updated, so a refresh survives a
@@ -380,7 +412,7 @@ export class WorkBuddyAccountService {
       views.push({
         id: account.id,
         uid: account.uid,
-        name: account.label ?? account.nickname ?? `${account.uid.slice(0, 8)}…`,
+        name: accountDisplayName(account),
         ...account.label === undefined ? {} : { label: account.label },
         ...account.nickname === undefined ? {} : { nickname: account.nickname },
         origin: account.origin,

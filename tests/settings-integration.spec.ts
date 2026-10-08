@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -6,6 +6,8 @@ import { Context } from '@deepseek-ai/cordis'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import { FakeSettingsService } from './fake-settings.ts'
 import * as WorkBuddy from '../src/index.ts'
+import { workbuddyConfigDir } from '../src/paths.ts'
+import { workbuddyVisibilityPath } from '../src/visibility-store.ts'
 
 let context: Context | undefined
 let root: string | undefined
@@ -106,6 +108,80 @@ describe('WorkBuddy Host settings integration', () => {
       expect((await ctx.llm.resolveModelInfo('workbuddy-ai', 'deepseek-v4.1-flash')).context?.contextWindow).toBe(300_000)
     })
     expect((ctx.settings as unknown as FakeSettingsService).valueOf(ENTRY, 'useMaximumContextWindow')).toBe(false)
+  })
+
+  it('filters the DSH model list by the account the filter is pointed at', async () => {
+    root = await mkdtemp(join(tmpdir(), 'dsh-workbuddy-connect-visibility-account-'))
+    vi.stubEnv('DSH_HOME', root)
+    const cnFile = join(root, 'cn.info')
+    await writeFile(cnFile, credentialDocument('copilot.tencent.com', 'uid-1'))
+    vi.stubEnv('WORKBUDDY_AUTH_FILE', cnFile)
+    vi.stubEnv('WORKBUDDY_AI_AUTH_FILE', join(root, 'absent.info'))
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline in tests') }))
+
+    // Two accounts in the CN pool, both enabled, and one model hidden by each.
+    // `visibilityAccountOf` keys them `uid:enterpriseId`, which is what the
+    // config field stores.
+    await mkdir(workbuddyConfigDir(), { recursive: true })
+    await writeFile(join(workbuddyConfigDir(), '.workbuddy-accounts.json'), JSON.stringify({
+      version: 1,
+      accounts: [
+        {
+          id: 'uid-1:ent-1', uid: 'uid-1', enterpriseId: 'ent-1', domain: 'copilot.tencent.com',
+          accessToken: 'at-1', refreshToken: 'rt-1', expiresAtMs: Date.now() + 3_600_000,
+          origin: 'desktop', enabled: true, lastUsedAtMs: 0,
+        },
+        {
+          id: 'uid-2:ent-2', uid: 'uid-2', enterpriseId: 'ent-2', nickname: 'Second', domain: 'copilot.tencent.com',
+          accessToken: 'at-2', refreshToken: 'rt-2', expiresAtMs: Date.now() + 3_600_000,
+          origin: 'qr', enabled: true, lastUsedAtMs: 0,
+        },
+      ],
+    }))
+    // A hide-list per account, written through the store the plugin reads.
+    await writeFile(workbuddyVisibilityPath('.workbuddy-model-visibility.json'), JSON.stringify({
+      version: 1,
+      accounts: {
+        // The desktop account hides hy3.
+        'uid-1:ent-1': { account: 'uid-1:ent-1', disabled: ['hy3'], updatedAtMs: 1 },
+        // The second account hides glm-5.3 instead.
+        'uid-2:ent-2': { account: 'uid-2:ent-2', disabled: ['glm-5.3'], updatedAtMs: 1 },
+      },
+    }))
+
+    // No choice stored: the primary rule applies, which is the desktop account.
+    const ctx = await bootWithSettings()
+    await vi.waitFor(() => {
+      expect(ctx.llm.listProviders().map(provider => provider.id)).toContain('workbuddy')
+    })
+    const listIds = async (): Promise<string[]> =>
+      (await ctx.llm.listModels('workbuddy')).map(model => model.id).sort()
+
+    // Primary = the desktop account, so ITS hidden model is the one missing.
+    expect(await listIds()).not.toContain('hy3')
+    expect(await listIds()).toContain('glm-5.3')
+
+    // Point the filter at the second account. The DSH picker must follow: this
+    // is the whole promise of the selector — one list per provider, filtered by
+    // the account the user chose.
+    await ctx.settings.update(WorkBuddy.WORKBUDDY_SETTINGS_NS, { visibilityAccount: 'uid-2:ent-2' })
+    await vi.waitFor(async () => {
+      expect(await listIds()).toContain('hy3')
+    })
+    expect(await listIds()).not.toContain('glm-5.3')
+
+    // …and back. A choice that names an account the pool does NOT hold falls
+    // back to the primary rule rather than emptying the list or keeping a
+    // departed account's filter in force.
+    await ctx.settings.update(WorkBuddy.WORKBUDDY_SETTINGS_NS, { visibilityAccount: 'uid-gone:ent-9' })
+    await vi.waitFor(async () => {
+      expect(await listIds()).not.toContain('hy3')
+    })
+    expect(await listIds()).toContain('glm-5.3')
+
+    // The document's own account section is asserted through the real routes in
+    // `sidebar-credit-toggle.spec.ts`; here the point is only what the picker
+    // serves, which is what the DSH model list above already shows.
   })
 
   it('exposes the settings section and the fallback model list', async () => {
@@ -284,7 +360,7 @@ describe('WorkBuddy Host settings integration', () => {
     // surfacing as a timeout. Two sweeps at the 100 ms interval above.
     await new Promise(resolve => setTimeout(resolve, 400))
     const poolUids = async (file: string): Promise<string[]> => {
-      const parsed = JSON.parse(await readFile(join(root as string, file), 'utf8')) as { accounts?: { uid?: string }[] }
+      const parsed = JSON.parse(await readFile(join(workbuddyConfigDir(), file), 'utf8')) as { accounts?: { uid?: string }[] }
       return (parsed.accounts ?? []).map(account => account.uid ?? '')
     }
     // The refused CN credential is nowhere in the AI pool, and the account that

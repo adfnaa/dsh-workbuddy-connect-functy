@@ -886,6 +886,110 @@ describe('WorkBuddy settings page', () => {
     expect(posted().some(entry => entry.body['action'] === 'open-link')).toBe(false)
   })
 
+  /** The model filter's account selector for the CN product. */
+  const accountSelect = (): HTMLSelectElement | null =>
+    document.querySelector(`#wbp-filter-account-${CN_CARD_VARIANT.id}`)
+
+  /** The options the selector offers, as `value → label`. */
+  const accountOptions = (): { value: string, label: string }[] =>
+    [...(accountSelect()?.options ?? [])].map(option => ({
+      value: option.value,
+      label: (option.textContent ?? '').trim(),
+    }))
+
+  it('offers every pool account to the model filter, and writes the chosen one', async () => {
+    // Two accounts in ONE product's pool, with the filter keyed to the first.
+    // This is the reported defect's shape: the controls used to be pinned to
+    // whoever was signed in, so the second account was unreachable.
+    byRoute[CN_CARD_VARIANT.statusPath] = {
+      ...signedIn([account({ id: 'uid-a:ent' }), account({ id: 'uid-b:ent', uid: 'uid-b', name: '备用号' })]),
+      models: [model('glm-5.3')],
+      visibility: {
+        account: 'uid-a:ent',
+        disabled: [],
+        choices: [
+          { id: 'uid-a:ent', name: '主账号', active: true },
+          { id: 'uid-b:ent', name: '备用号', active: false },
+        ],
+      },
+    } as unknown as WorkBuddyWebStatus
+    await mount()
+
+    const select = accountSelect()
+    expect(select).not.toBeNull()
+    expect(select?.value).toBe('uid-a:ent')
+    expect(accountOptions().map(option => option.value)).toEqual(['uid-a:ent', 'uid-b:ent'])
+    // The option for the account in effect says so, so the user can tell which
+    // list the checkboxes below belong to.
+    expect(accountOptions()[0]!.label).toContain('主账号')
+
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set
+      setter?.call(select, 'uid-b:ent')
+      select?.dispatchEvent(new Event('change', { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const call = posted().find(entry => entry.body['action'] === 'set-visibility-account')
+    expect(call).toBeDefined()
+    // The write goes to its own product's route and names the chosen account:
+    // the wrong route would key the AI product's filter from the CN selector.
+    expect(call?.url).toBe(CN_CARD_VARIANT.probePath)
+    expect(call?.body['account']).toBe('uid-b:ent')
+  })
+
+  it('keeps a staged model edit out of the account it was not made for', async () => {
+    // A draft is assembled against one account's list, so switching accounts
+    // must discard it: carrying it over would apply A's selection to B.
+    byRoute[CN_CARD_VARIANT.statusPath] = {
+      ...signedIn([account({ id: 'uid-a:ent' }), account({ id: 'uid-b:ent', uid: 'uid-b', name: '备用号' })]),
+      models: [model('glm-5.3'), model('glm-5.1')],
+      visibility: {
+        account: 'uid-a:ent',
+        disabled: [],
+        choices: [
+          { id: 'uid-a:ent', name: '主账号', active: true },
+          { id: 'uid-b:ent', name: '备用号', active: false },
+        ],
+      },
+    } as unknown as WorkBuddyWebStatus
+    await mount()
+
+    // Stage an edit (unticking through the picker turns the filter on).
+    await act(async () => {
+      document.querySelector<HTMLInputElement>(`#wbp-filter-${CN_CARD_VARIANT.id}`)?.click()
+      await Promise.resolve()
+    })
+    expect(text()).toContain(t('saveBarUnsaved'))
+
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value')?.set
+      setter?.call(accountSelect(), 'uid-b:ent')
+      accountSelect()?.dispatchEvent(new Event('change', { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // The draft is gone, and the save bar no longer offers to write it.
+    expect(text()).not.toContain(t('saveBarUnsaved'))
+    // Nothing was written as a model edit: the only write is the choice itself.
+    expect(posted().some(entry => entry.body['action'] === 'set-model-allowlist')).toBe(false)
+  })
+
+  it('hides the selector when the host publishes no choices', async () => {
+    // A host from before this feature. The card must render no selector rather
+    // than one whose write it would refuse — the same rule every other optional
+    // control follows.
+    byRoute[CN_CARD_VARIANT.statusPath] = {
+      ...signedIn([account()]),
+      models: [model('glm-5.3')],
+      visibility: { account: 'uid-a:ent', disabled: [] },
+    } as unknown as WorkBuddyWebStatus
+    await mount()
+    expect(accountSelect()).toBeNull()
+  })
+
   it('shows each product\'s model list with its promotions and context length', async () => {
     byRoute[CN_CARD_VARIANT.statusPath] = {
       ...signedIn([account()]),
@@ -1089,7 +1193,11 @@ describe('WorkBuddy settings page', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(text()).toContain('no WorkBuddy credential')
+    // The refusal reaches the page as readable copy rather than the host's own
+    // wire sentence — the page restates the host's reasons in the interface's
+    // language (see `client/host-reason.ts`). What this pins is that a refusal
+    // is surfaced at all, which is the part that used to fail silently.
+    expect(text()).toContain(t('hostNoCredential'))
   })
 
   it('shows a recorded detection beside the model it belongs to', async () => {

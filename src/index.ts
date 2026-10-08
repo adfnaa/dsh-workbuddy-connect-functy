@@ -21,7 +21,7 @@ import type {} from '@deepseek-ai/dsh-attachment'
 import { markVolatileFields, unwrapVolatileConfig } from './config-volatile.ts'
 import { WorkBuddyCredentialStore, type WorkBuddyCredential, type WorkBuddyStoreOptions } from './auth.ts'
 import { atRestKeyProviderFor, WorkBuddyAtRestKeyProvider } from './desktop-credential-protection.ts'
-import { WorkBuddyAccountPool, credentialAccountId, credentialOf } from './account-pool.ts'
+import { WorkBuddyAccountPool, accountDisplayName, credentialAccountId, credentialOf } from './account-pool.ts'
 import { WorkBuddyAccountService } from './account-service.ts'
 import { registerWorkBuddyAccountRoute } from './account-route.ts'
 import { WorkBuddyQrLogin } from './qr-login.ts'
@@ -42,10 +42,12 @@ import { createProbeKey, keyMatches, registerWorkBuddyProbeRoute } from './probe
 import { openWorkBuddyLink } from './open-link.ts'
 import type { WorkBuddyModelInfo } from './catalog.ts'
 import { isWorkBuddySidebarCreditStyle, WORKBUDDY_PROFILE_ENTRY_ID } from './status-paths.ts'
-import type { WorkBuddySidebarCreditStyle, WorkBuddyWebCatalog, WorkBuddyWebProbeSection } from './status-paths.ts'
+import type { WorkBuddySidebarCreditStyle, WorkBuddyWebCatalog, WorkBuddyWebCheckInSection, WorkBuddyWebProbeSection } from './status-paths.ts'
 import { WORKBUDDY_PREFERENCES, statedPreferences } from './preferences.ts'
 import type { WorkBuddyPreferenceConfig } from './preferences.ts'
 import { clearHostHeartbeat, writeHostHeartbeat } from './host-heartbeat.ts'
+import { WorkBuddyCheckIn, normalizeCheckInMinute, utc8DateString } from './checkin.ts'
+import { WorkBuddyCheckInScheduler, WorkBuddyCheckInStore } from './checkin-scheduler.ts'
 import { WORKBUDDY_CONNECT_VERSION } from './version.ts'
 import { CN_VARIANT, WORKBUDDY_VARIANTS, type WorkBuddyVariant } from './variants.ts'
 import type { WorkBuddyAccountAction, WorkBuddyAccountResult } from './status-paths.ts'
@@ -53,6 +55,7 @@ import type { WorkBuddyAccountAction, WorkBuddyAccountResult } from './status-pa
 export { WORKBUDDY_PROVIDER, WORKBUDDY_STREAM_IDLE_TIMEOUT_MS, createWorkBuddyAdapter, type WorkBuddyAdapter } from './adapter.ts'
 export { createWorkBuddyShim, createStoreSender, type WorkBuddyChatSender, type WorkBuddyShim } from './shim.ts'
 export {
+  accountDisplayName,
   accountIdOf,
   cooldownDurationMs,
   credentialAccountId,
@@ -202,6 +205,25 @@ export {
   workbuddyHostHeartbeatPath,
   type WorkBuddyHostHeartbeat,
 } from './host-heartbeat.ts'
+export {
+  DEFAULT_CHECK_IN_MINUTE,
+  isPastCheckInTime,
+  msUntilCheckIn,
+  normalizeCheckInMinute,
+  utc8DateString,
+  WorkBuddyCheckIn,
+  type WorkBuddyCheckInResult,
+} from './checkin.ts'
+export {
+  WORKBUDDY_CHECKIN_FILENAME,
+  WorkBuddyCheckInScheduler,
+  WorkBuddyCheckInStore,
+  workbuddyCheckInPath,
+  type WorkBuddyCheckInAccount,
+  type WorkBuddyCheckInAccountState,
+  type WorkBuddyCheckInLogRow,
+  type WorkBuddyCheckInVariantState,
+} from './checkin-scheduler.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'llm-workbuddy'
@@ -309,6 +331,44 @@ interface WorkBuddyConfiguredFields {
   probeConsent?: boolean
   /** Use the largest context window the international catalog explicitly offers. */
   useMaximumContextWindow?: boolean
+  /**
+   * Whether the CN product's daily benefit is claimed automatically.
+   *
+   * Off by default, like every other thing this plugin does on the user's
+   * behalf without being asked: the request spends a real (if free) upstream
+   * call against their account, and a plugin that starts talking to a benefit
+   * endpoint the moment it is installed is a surprise. The card's check-in
+   * section is where it gets switched on.
+   */
+  autoCheckIn?: boolean
+  /** The same switch for the international product. */
+  autoCheckInAI?: boolean
+  /**
+   * When to claim, as minutes past midnight UTC+8 (600 = 10:00).
+   *
+   * UTC+8 for both products because the daily reset is the upstream's, not the
+   * machine's — see {@link normalizeCheckInMinute}.
+   */
+  checkInMinute?: number
+  /** The same moment for the international product. */
+  checkInMinuteAI?: number
+  /**
+   * Which account the model filter is edited for, per product.
+   *
+   * Empty (the default) means "follow the primary account" — the only behaviour
+   * every earlier build had, and the reason this is a preference rather than a
+   * per-card local state: the DSH model picker has ONE list per provider, so
+   * which account's filter is in force is a product-wide decision that has to
+   * survive a reload and be the same one the host filters by.
+   *
+   * A pool identity (`uid:enterpriseId`), not a token. An account that has since
+   * been removed falls back to the primary rule rather than hiding every model:
+   * a preference naming an account nobody has any more must not be able to empty
+   * the picker.
+   */
+  visibilityAccount?: string
+  /** The same choice for the international product. */
+  visibilityAccountAI?: string
 }
 
 /** Plugin configuration. */
@@ -323,6 +383,28 @@ const PROBE_CONSENT_FIELD = z.boolean().default(false)
   .description('Authorize reasoning-effort probes (each probe sends real requests that may consume credit)')
 const MAXIMUM_CONTEXT_WINDOW_FIELD = z.boolean().default(true)
   .description('Use the largest context window declared by WorkBuddy AI when alternatives are available (on by default)')
+/** Automatic daily check-in, one switch per product (both off by default). */
+const AUTO_CHECK_IN_FIELD = z.boolean().default(false)
+  .description('Claim this product\'s daily benefit automatically (sends one request a day to the billing endpoint)')
+/**
+ * The moment to claim, as minutes past midnight UTC+8.
+ *
+ * Bounded rather than clamped at the schema: this value reaches the store and
+ * the scheduler, and a form that silently rewrites 5000 to 600 hides the typo
+ * from whoever typed it. `normalizeCheckInMinute` still clamps what a
+ * hand-edited file can hold, because that path has no form to complain in.
+ */
+const CHECK_IN_MINUTE_FIELD = z.number().default(600)
+  .description('When to claim it, as minutes past midnight UTC+8 (600 = 10:00)')
+/**
+ * Which account the model filter is edited for, per product.
+ *
+ * A string rather than a closed set: pool identities are minted at sign-in and
+ * cannot be enumerated in a schema. Empty means "follow the primary account",
+ * which is the default and the only state earlier builds had.
+ */
+const VISIBILITY_ACCOUNT_FIELD = z.string().default('')
+  .description('Which pooled account the model filter is edited for (empty: follow the account the card is showing)')
 /**
  * The preference fields, taken from the one table that declares them.
  *
@@ -351,6 +433,12 @@ const CONFIG_FIELDS = {
   authFileAI: AUTH_FILE_AI_FIELD,
   probeConsent: PROBE_CONSENT_FIELD,
   useMaximumContextWindow: MAXIMUM_CONTEXT_WINDOW_FIELD,
+  autoCheckIn: AUTO_CHECK_IN_FIELD,
+  autoCheckInAI: AUTO_CHECK_IN_FIELD,
+  checkInMinute: CHECK_IN_MINUTE_FIELD,
+  checkInMinuteAI: CHECK_IN_MINUTE_FIELD,
+  visibilityAccount: VISIBILITY_ACCOUNT_FIELD,
+  visibilityAccountAI: VISIBILITY_ACCOUNT_FIELD,
   ...PREFERENCE_FIELDS,
 } as const
 
@@ -419,6 +507,27 @@ interface VariantRuntime {
    * so an account switch changes the answer without rebuilding anything.
    */
   account: () => string | undefined
+  /**
+   * The account key the model filter applies for: the user's chosen account
+   * when it is still a pool member, else {@link account}'s answer.
+   *
+   * Separate from {@link account} because they answer different questions and
+   * must be able to disagree: `account` is "who is signed in", which stays the
+   * desktop app's account so the card's name and credit figure are stable,
+   * while this is "whose model list am I editing", which the user may point at
+   * any pool member.
+   */
+  visibilityAccount: () => string | undefined
+  /**
+   * The stored choice behind {@link visibilityAccount}, when it still names a
+   * pool member.
+   *
+   * `undefined` covers both "no choice stored" and "the choice is stale" — the
+   * card cannot act differently on the two (there is nothing to show either
+   * way), and the section reports the resolved key beside this flag rather than
+   * a third state nothing renders.
+   */
+  visibilityChoice: () => string | undefined
   /** The static roster this variant falls back to. */
   fallback: readonly WorkBuddyModelInfo[]
   /**
@@ -590,6 +699,27 @@ function createVariantRuntime(
   const visibilityStore = new WorkBuddyVisibilityStore(
     workbuddyVisibilityPath(variant.visibilityFilename),
   )
+  /**
+   * The stored model-filter account choice for THIS product, when it still
+   * names a pool member.
+   *
+   * Read from `current()` on every call rather than captured, because it is a
+   * saved preference: a change has to reach the very next filter read. A stored
+   * identity the pool no longer holds answers `undefined` — the primary rule
+   * takes over — rather than the stale key, because the key selects a filter
+   * bucket and honouring a departed account's would hide models on behalf of an
+   * account the picker cannot even name.
+   */
+  const visibilityChoice = (): string | undefined => {
+    const chosen = variant.id === CN_VARIANT.id
+      ? current().visibilityAccount
+      : current().visibilityAccountAI
+    if (typeof chosen !== 'string' || chosen === '') return undefined
+    // Matched through `visibilityAccountOf`, the same derivation every reader
+    // uses, so "this account is in the pool" cannot mean one thing here and
+    // another in the section below.
+    return pool.list().some(account => visibilityAccountOf(account) === chosen) ? chosen : undefined
+  }
   // Request accounting: what each account has actually sent, and what the
   // upstream said it cost. Written at most once every few seconds — a
   // per-request write would turn every chat turn into disk I/O for a report.
@@ -629,6 +759,27 @@ function createVariantRuntime(
     visibilityStore,
     usageStore,
     account: () => accountOf(variant.id),
+    // The key the model filter ACTUALLY applies for, which is the chosen
+    // account when the user picked one and it is still a pool member, and the
+    // primary account's key otherwise.
+    //
+    // Read per call from the live config, because it is a stored preference:
+    // changing it has to reach the very next filter read without a restart, and
+    // the picker's own answer is computed from this same call (the adapter's
+    // `hidden`).
+    //
+    // A choice naming an account the pool no longer holds falls back to the
+    // primary rule rather than answering the stale key. That is not tidiness:
+    // the key is a filter bucket, so honouring a departed account's key would
+    // hide every model that account had hidden, from a pool that can no longer
+    // show the account it belonged to.
+    visibilityAccount: () => visibilityChoice() ?? accountOf(variant.id),
+    // The user's own choice, when it still names a pool member; undefined while
+    // the primary rule is in force. Kept beside the resolver above rather than
+    // derived from it, because the section reports BOTH — the key in effect and
+    // whether a choice produced it — and inferring the second from the first
+    // would confuse "chose the primary account" with "chose nothing".
+    visibilityChoice: () => visibilityChoice(),
     fallback,
     catalogSource: 'fallback',
     catalogFetchedAtMs: undefined,
@@ -700,6 +851,60 @@ function probeSection(runtime: VariantRuntime, consent: boolean): WorkBuddyWebPr
     // Newest first: a detection the user just ran belongs at the top, not
     // appended below every earlier one.
     results: newestFirst(results),
+  }
+}
+
+/**
+ * The check-in section for one card: its switches, and what has happened.
+ *
+ * The switches are read from the live config on every call rather than captured
+ * at registration, so a write through the settings page reaches the very next
+ * status read — the same rule every other preference here follows. The
+ * per-account rows come from the pool for the same reason: an account added a
+ * moment ago has to appear on the next render, not after a restart.
+ *
+ * @param nextRunAt - the scheduler's answer for this variant, when one is armed.
+ */
+function checkInSection(
+  runtime: VariantRuntime,
+  config: Config,
+  store: WorkBuddyCheckInStore,
+  nextRunAt: number | undefined,
+): WorkBuddyWebCheckInSection {
+  const cn = runtime.variant.id === CN_VARIANT.id
+  const auto = (cn ? config.autoCheckIn : config.autoCheckInAI) === true
+  const minuteOfDay = normalizeCheckInMinute(cn ? config.checkInMinute : config.checkInMinuteAI)
+  const saved = store.read(runtime.variant.id)
+  const today = utc8DateString(Date.now())
+  return {
+    auto,
+    minuteOfDay,
+    // Only when a run is actually armed: with the switch off nothing is
+    // scheduled, and a timestamp would promise a run that will not happen.
+    ...(!auto || nextRunAt === undefined) ? {} : { nextRunAt },
+    // One row per account the scheduler will claim for, in pool order, so the
+    // section answers "which of my accounts still owes today's benefit" rather
+    // than describing a single one. Read from the same `claimableAccounts` the
+    // scheduler iterates: a row promising a claim the sweep would skip (or
+    // omitting one it would make) is worse than no row.
+    accounts: runtime.accounts.claimableAccounts().map(account => {
+      const state = saved?.accounts[account.id]
+      return {
+        id: account.id,
+        name: accountDisplayName(account),
+        settled: state?.lastDate === today
+          && (state.status === 'claimed' || state.status === 'already-claimed' || state.status === 'no-campaign'),
+        ...state === undefined ? {} : { lastAt: state.lastAt, status: state.status },
+        ...state?.lastDate === undefined || state.lastDate === '' ? {} : { lastDate: state.lastDate },
+        ...state?.amount === undefined ? {} : { amount: state.amount },
+      }
+    }),
+    // The newest settle across every account: "when did this product last get
+    // anything" is one answer, and naming just one account's date would make
+    // the headline depend on which account happened to be first in the pool.
+    ...saved === undefined || saved.logs.length === 0
+      ? {}
+      : { lastDate: saved.logs[0]?.date as string, logs: saved.logs },
   }
 }
 
@@ -801,7 +1006,7 @@ async function startVariant(ctx: Context, runtime: VariantRuntime): Promise<bool
       // catalog is the same one the adapter lists models from, so the two agree
       // on what "outside the allowlist" covers.
       hidden: () => {
-        const account = runtime.account()
+        const account = runtime.visibilityAccount()
         if (account === undefined) return []
         return runtime.visibilityStore.effectiveHidden(
           account,
@@ -913,6 +1118,80 @@ export function apply(ctx: Context, config: Config): void {
    */
   const lastAccounts = new Map<string, string>()
 
+  /**
+   * The daily check-in: one service, one log, one scheduler for both products.
+   *
+   * One scheduler rather than one per variant because the two products' moments
+   * are independent but their *driver* is not: a single timer loop over both
+   * targets means changing one product's moment cannot disturb the other's
+   * pending run, and the log file stays one document with a section per
+   * product (see `checkin-scheduler.ts`).
+   */
+  const checkInStore = new WorkBuddyCheckInStore()
+  const checkInService = new WorkBuddyCheckIn()
+  /**
+   * One target per variant, assembled from the runtimes built below.
+   *
+   * Declared before the scheduler so the "switched on" and "when" answers are
+   * read from the LIVE config at each firing: a user who changes the moment (or
+   * flips the switch) gets that answer on the next sweep without re-registering
+   * anything, which is what `rearm()` is then called for.
+   */
+  const checkInScheduler = new WorkBuddyCheckInScheduler({
+    targets: WORKBUDDY_VARIANTS.map(variant => ({
+      variantId: variant.id,
+      enabled: () => (variant.id === CN_VARIANT.id ? current().autoCheckIn : current().autoCheckInAI) === true,
+      minuteOfDay: () => normalizeCheckInMinute(
+        variant.id === CN_VARIANT.id ? current().checkInMinute : current().checkInMinuteAI,
+      ),
+      // Every enabled pool member, not only the primary account: the upstream
+      // grants one daily benefit PER ACCOUNT, so claiming for the first one and
+      // calling the day settled left every other signed-in account's benefit
+      // unclaimed for as long as those accounts existed. Read per sweep, so an
+      // account added while the host runs is claimed for on the next run.
+      //
+      // `captureDesktop()` lives in `prepare` rather than here, and that is
+      // load-bearing rather than a flourish. The pool learns the desktop app's
+      // sign-in only from a capture, and the sweep that performs one runs on a
+      // 30-second timer started later in `apply()`. A check-in that runs before
+      // that first sweep — which is exactly what a catch-up on a freshly started
+      // host does, since the moment it is catching up is already in the past —
+      // would otherwise read an EMPTY pool and claim for nobody, losing the
+      // day's benefit until the next start. The capture also means an account
+      // signed into the desktop app a moment ago is claimable without a restart.
+      prepare: async () => {
+        const runtime = runtimes.find(candidate => candidate.variant.id === variant.id)
+        if (runtime === undefined) return
+        await runtime.accounts.captureDesktop()
+      },
+      accounts: () => {
+        const runtime = runtimes.find(candidate => candidate.variant.id === variant.id)
+        if (runtime === undefined) return []
+        return runtime.accounts.claimableAccounts().map(account => ({
+          id: account.id,
+          name: accountDisplayName(account),
+        }))
+      },
+      // The credential is resolved PER ACCOUNT rather than by the primary rule:
+      // the whole point is to act as the named account, and the primary rule
+      // would answer the same one for every iteration.
+      checkIn: async (_session, account) => {
+        const runtime = runtimes.find(candidate => candidate.variant.id === variant.id)
+        if (runtime === undefined) {
+          return {
+            variantId: variant.id,
+            date: utc8DateString(Date.now()),
+            timestamp: Date.now(),
+            status: 'error',
+            message: 'no credential to check in with',
+          }
+        }
+        return await checkInService.checkIn(variant.id, await runtime.accounts.credentialFor(account.id))
+      },
+    })),
+    store: checkInStore,
+  })
+
   // One at-rest key provider per variant, built by the shared helper the CLI
   // entry uses too. Product identity (env var, bundle id, registry name, exe
   // basename) lives on the variant's electron profile, so each provider can
@@ -960,6 +1239,23 @@ export function apply(ctx: Context, config: Config): void {
   let setComposerCreditVisible: ((visible: boolean) => Promise<{ state: string; reason?: string }>) | undefined
   /** Writes whether the composer keeps its reasoning-detection control. */
   let setProbeControlVisible: ((visible: boolean) => Promise<{ state: string; reason?: string }>) | undefined
+  /**
+   * Writes one product's automatic-check-in switch, and when it claims.
+   *
+   * Undefined on a host with no settings service, exactly like the display
+   * switches beside them: the status document then carries no switch, and the
+   * card renders no check-in controls rather than ones that could not be saved.
+   */
+  let setAutoCheckIn: ((variantId: string, enabled: boolean) => Promise<{ state: string; reason?: string }>) | undefined
+  let setCheckInMinute: ((variantId: string, minuteOfDay: number) => Promise<{ state: string; reason?: string }>) | undefined
+  /**
+   * Writes which account the model filter is edited for, one field per product.
+   *
+   * Undefined on a host with no settings service, exactly like the switches
+   * beside it: the status document then carries no `choices` list, and the card
+   * renders no account selector rather than one whose write could not land.
+   */
+  let setVisibilityAccount: ((variantId: string, account: string) => Promise<{ state: string; reason?: string }>) | undefined
   /**
    * Whether the host mounted a settings service this plugin can write through.
    * Decided once, inside the `settings` inject. The maximum-context getter
@@ -1057,6 +1353,10 @@ export function apply(ctx: Context, config: Config): void {
         resolveContextWindow: (modelId, declared) => runtime.contextPreference.resolve(modelId, declared),
         catalog: () => catalogSection(runtime),
         probe: () => probeSection(runtime, current().probeConsent === true),
+        // Check-in state for this product's own section: its switches, its
+        // moment, and its log. Read through `current()` so a settings write is
+        // visible to the very next status read.
+        checkIn: () => checkInSection(runtime, current(), checkInStore, checkInScheduler.nextRunAt(runtime.variant.id)),
         // Every display preference rides the status document, projected from the
         // live config, so the sidebar knows how to draw itself before anything
         // else on the page can tell it what the settings say — and so the very
@@ -1069,7 +1369,7 @@ export function apply(ctx: Context, config: Config): void {
         // checkboxes answer exactly what the picker filter reads. Absent (and
         // the card renders no controls) when no uid-keyed account is in effect.
         visibility: () => {
-          const account = runtime.account()
+          const account = runtime.visibilityAccount()
           if (account === undefined) return undefined
           const allowlist = runtime.visibilityStore.allowlist(account)
           return {
@@ -1078,6 +1378,23 @@ export function apply(ctx: Context, config: Config): void {
             // Omitted rather than an empty array: absent is the "no filter"
             // state, which is what the page renders the checkbox for.
             ...allowlist === undefined ? {} : { allowlist },
+            // The accounts the selector offers, from the pool rather than from
+            // the signed-in credential alone: the whole point of the control is
+            // to edit a preference for an account that is NOT the one the card
+            // is reporting. Present even for a single-account pool, because its
+            // presence is the card's capability signal for the selector.
+            choices: runtime.pool.list().map(candidate => {
+              const key = visibilityAccountOf(candidate)
+              return {
+                id: key ?? candidate.id,
+                name: accountDisplayName(candidate),
+                active: key !== undefined && key === account,
+              }
+            }).filter(choice => choice.id !== ''),
+            // Whether the user's own choice — rather than the primary rule — is
+            // what answered above. The card uses it to say so, and to know a
+            // fallback happened (the chosen account was removed).
+            chosen: runtime.visibilityChoice() === account,
           }
         },
         ...runtime.variant.id === CN_VARIANT.id ? {} : {
@@ -1206,14 +1523,19 @@ export function apply(ctx: Context, config: Config): void {
           // credential with no uid, has no account to key the preference by,
           // and writing it anywhere else would let one account's hidden list
           // answer for another.
-          const account = runtime.account()
+          //
+          // The key is the account the FILTER applies for — the user's chosen
+          // one when there is one — not the sign-in the card happens to report:
+          // the controls on screen edit the effective list, so a write that
+          // landed anywhere else would make the page's own checkboxes lie.
+          const account = runtime.visibilityAccount()
           if (account === undefined) {
             return { state: 'failed', reason: 'model visibility needs a signed-in account with a stable user id' }
           }
           // Expected-account guard: the card names the account its checkboxes
           // were rendered from. A card still showing account A while the
-          // desktop has already switched to B must not land A's toggle in B's
-          // bucket — refuse, and the card refreshes into B's own section.
+          // effective account has already moved to B must not land A's toggle in
+          // B's bucket — refuse, and the card refreshes into B's own section.
           if (expectedAccount !== account) {
             return { state: 'stale-account', reason: 'the signed-in account changed' }
           }
@@ -1227,13 +1549,13 @@ export function apply(ctx: Context, config: Config): void {
           return { state: 'updated' }
         },
         setModelAllowlist: async (ids, expectedAccount) => {
-          const account = runtime.account()
+          const account = runtime.visibilityAccount()
           if (account === undefined) {
             return { state: 'failed', reason: 'model visibility needs a signed-in account with a stable user id' }
           }
           // The same expected-account guard as the per-model write, for the same
           // reason: an allowlist sent from a card rendering account A must not
-          // land in B's bucket after the desktop switched accounts.
+          // land in B's bucket after the effective account changed.
           if (expectedAccount !== account) {
             return { state: 'stale-account', reason: 'the signed-in account changed' }
           }
@@ -1248,9 +1570,102 @@ export function apply(ctx: Context, config: Config): void {
           runtime.invalidate()
           return { state: 'updated' }
         },
+        // Point the model filter at one pool account, or back at the primary
+        // rule with an empty id.
+        //
+        // A settings write like the display preferences above, and immediate
+        // rather than staged: it is not an edit to a model list (that is what
+        // the save bar is for) but the choice of WHICH list is being edited, and
+        // a card that kept showing account A's ticks while the write said B
+        // would be a control disagreeing with its own subject.
+        setVisibilityAccount: async account => {
+          if (setVisibilityAccount === undefined) return { state: 'failed', reason: 'settings are unavailable' }
+          // Refused rather than stored: an id that is not a pool member of this
+          // variant would be a preference nothing can ever honour, and it would
+          // silently fall back on the next read — which reads as "the selector
+          // does not stick".
+          if (account !== '' && !runtime.pool.list().some(candidate => visibilityAccountOf(candidate) === account)) {
+            return { state: 'failed', reason: 'unknown account for this product' }
+          }
+          const result = await setVisibilityAccount(runtime.variant.id, account)
+          // The filter follows this immediately on the host side, so the model
+          // directory is told to rebuild — otherwise the picker would keep the
+          // previous account's hidden list until the next unrelated refresh.
+          if (result.state === 'updated') runtime.invalidate()
+          return result
+        },
         // Any variant's key opens the link: the action is not variant-scoped,
         // and the page may be rendering product A while B is the one signed in.
         // Compared the same constant-time way the handler compares a bare key.
+        // The check-in group, one route per variant like the rest of the card:
+        // the variant is the route's, so the browser cannot ask this route to
+        // claim for the other product.
+        checkIn: async () => {
+          // Not gated on the automatic switch: pressing this button IS the
+          // consent, and a user who wants today's benefit without a daily
+          // schedule must be able to get it. The switch only authorizes the
+          // requests nobody asked for.
+          //
+          // EVERY enabled account, exactly like the sweep — the button says
+          // "claim today", and the product's benefit is one claim per account.
+          // Doing it for the primary alone is what made the manual button and
+          // the timer disagree about what "checked in" means.
+          //
+          // The desktop app is captured first for the same reason the scheduler
+          // does it: the button is pressed precisely when the user has just
+          // signed in somewhere, and a pool that has not learned about it yet
+          // would report "no credential" for an account that is right there.
+          await runtime.accounts.captureDesktop().catch(() => undefined)
+          const session = utc8DateString(Date.now())
+          const accounts = runtime.accounts.claimableAccounts()
+          if (accounts.length === 0) {
+            return { state: 'failed', reason: 'no credential to check in with' }
+          }
+          let claimed = 0
+          let settled = 0
+          const failures: string[] = []
+          for (const account of accounts) {
+            const credential = await runtime.accounts.credentialFor(account.id)
+            const result = await checkInService.checkIn(runtime.variant.id, credential)
+            checkInStore.write(runtime.variant.id, account.id, accountDisplayName(account), result, session)
+            if (result.status === 'claimed') claimed += 1
+            else if (result.status === 'error') failures.push(result.message ?? 'check-in failed')
+            else settled += 1
+          }
+          // A claim changes the balance, and the card is about to re-read it.
+          if (claimed > 0) ctx.emit('llm/adapters-updated')
+          // Only a run where NOTHING settled is a failure: one account's
+          // upstream refusal must not make a partly-successful press report an
+          // error, and the card's log names which account did what either way.
+          if (failures.length > 0 && claimed === 0 && settled === 0) {
+            return { state: 'failed', reason: failures[0] as string }
+          }
+          // A settled day is reported with whatever the upstream said — a
+          // claim, an already-claimed refusal, or no campaign — and the card's
+          // log is the real record either way.
+          return {
+            state: 'ok',
+            ...failures.length === 0 ? {} : { reason: failures[0] as string },
+          }
+        },
+        setAutoCheckIn: async enabled => {
+          if (setAutoCheckIn === undefined) return { state: 'failed', reason: 'settings are unavailable' }
+          const result = await setAutoCheckIn(runtime.variant.id, enabled)
+          // The card draws the section from a status read, so the change has to
+          // be visible to the next one without waiting for a sweep.
+          if (result.state === 'updated') ctx.emit('llm/adapters-updated')
+          return result
+        },
+        setCheckInMinute: async minuteOfDay => {
+          if (setCheckInMinute === undefined) return { state: 'failed', reason: 'settings are unavailable' }
+          const result = await setCheckInMinute(runtime.variant.id, minuteOfDay)
+          if (result.state === 'updated') ctx.emit('llm/adapters-updated')
+          return result
+        },
+        clearCheckInLogs: () => {
+          checkInStore.clearLogs(runtime.variant.id)
+          ctx.emit('llm/adapters-updated')
+        },
       }, (presented: string | undefined) => keyMatches(probeKey, presented))
     }
   })
@@ -1302,6 +1717,11 @@ export function apply(ctx: Context, config: Config): void {
       for (const runtime of runtimes) {
         runtime.store.setDesktopPath(configuredAuthFile(next, runtime.variant))
       }
+      // The check-in moment is read from the live config at each firing, so a
+      // changed moment only needs the ARMED timer rebuilt — otherwise the old
+      // moment would still fire first and the user's change would look ignored
+      // until the following day.
+      checkInScheduler.rearm()
     })
 
     // A form write is addressed by the PROFILE ENTRY id \u2014 the Loader row's own
@@ -1387,6 +1807,48 @@ export function apply(ctx: Context, config: Config): void {
       }
       return { state: 'updated' }
     }
+    // The check-in switches, one field per product. Written through the same
+    // settings service and then re-armed explicitly, because the timer that was
+    // armed for the old moment would otherwise still fire first.
+    setAutoCheckIn = async (variantId, enabled) => {
+      if (forms.update === undefined) {
+        return { state: 'failed', reason: 'this host does not accept settings writes' }
+      }
+      const field = variantId === CN_VARIANT.id ? 'autoCheckIn' : 'autoCheckInAI'
+      try {
+        await forms.update(entryId() ?? PROFILE_ENTRY_ID, { [field]: enabled })
+      } catch (error: unknown) {
+        return { state: 'failed', reason: error instanceof Error ? error.message.slice(0, 300) : String(error) }
+      }
+      return { state: 'updated' }
+    }
+    setCheckInMinute = async (variantId, minuteOfDay) => {
+      if (forms.update === undefined) {
+        return { state: 'failed', reason: 'this host does not accept settings writes' }
+      }
+      const field = variantId === CN_VARIANT.id ? 'checkInMinute' : 'checkInMinuteAI'
+      try {
+        await forms.update(entryId() ?? PROFILE_ENTRY_ID, { [field]: normalizeCheckInMinute(minuteOfDay) })
+      } catch (error: unknown) {
+        return { state: 'failed', reason: error instanceof Error ? error.message.slice(0, 300) : String(error) }
+      }
+      return { state: 'updated' }
+    }
+    // The model-filter account choice, one field per product. Written through
+    // the same service as everything else here, so the next status read carries
+    // the new answer and both halves agree about which list is in force.
+    setVisibilityAccount = async (variantId, account) => {
+      if (forms.update === undefined) {
+        return { state: 'failed', reason: 'this host does not accept settings writes' }
+      }
+      const field = variantId === CN_VARIANT.id ? 'visibilityAccount' : 'visibilityAccountAI'
+      try {
+        await forms.update(entryId() ?? PROFILE_ENTRY_ID, { [field]: account })
+      } catch (error: unknown) {
+        return { state: 'failed', reason: error instanceof Error ? error.message.slice(0, 300) : String(error) }
+      }
+      return { state: 'updated' }
+    }
   })
 
   /**
@@ -1406,8 +1868,15 @@ export function apply(ctx: Context, config: Config): void {
     stopped = true
     for (const timer of timers) clearInterval(timer)
     timers.length = 0
+    checkInScheduler.dispose()
     void clearHostHeartbeat()
   })
+
+  // Started after the routes are mounted, so a check-in that lands immediately
+  // (a catch-up sweep) finds the card's own read already answering. The sweep
+  // only runs a variant whose moment has passed and whose day is unsettled, so
+  // a host started before the configured moment does nothing here.
+  checkInScheduler.start()
 
   /**
    * Execute one account-pool action from the card.
